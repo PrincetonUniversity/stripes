@@ -113,10 +113,10 @@ reg [`JTAG_REQ_MISC_WIDTH-1:0] req_misc;
 reg [`JTAG_REQ_TILEID_WIDTH-1:0] req_tileid;
 reg [`JTAG_REQ_THREADID_WIDTH-1:0] req_threadid;
 reg [`JTAG_ADDRESS_REG_WIDTH-1:0] req_address;
-reg [`JTAG_ADDRESS_INDEX_WIDTH:0] req_address_index;
-reg [`JTAG_ADDRESS_SRAMID_WIDTH:0] req_address_sramid;
-reg [`JTAG_ADDRESS_BSEL_WIDTH:0] req_address_bsel;
-reg [63:0] req_data;
+reg [`JTAG_ADDRESS_INDEX_WIDTH-1:0] req_address_index;
+reg [`JTAG_ADDRESS_SRAMID_WIDTH-1:0] req_address_sramid;
+reg [`JTAG_ADDRESS_BSEL_WIDTH-1:0] req_address_bsel;
+reg [`JTAG_DATA_REQ_WIDTH-1:0] req_data;
 ////////////////////////////////
 
 ////////////////////////////////
@@ -125,7 +125,6 @@ reg [63:0] req_data;
 reg [`RTAP_RET_OP_WIDTH-1:0] res_op_next;
 reg [`RTAP_RET_OP_WIDTH-1:0] res_op;
 reg res_val;
-// reg [(`CTAP_UCB_PACKET_WIDTH/`UCB_BUS_WIDTH)-1:0] res_vec;
 reg sram_res_val;
 reg sram_res_val_f;
 
@@ -172,14 +171,15 @@ end
 ////////////////////////////////
 // req/res to sram, muxed properly
 ////////////////////////////////
-reg [15:0] sram_req_address_reg;
-reg [3:0] sram_req_sramid_reg;
-reg [63:0] sram_data_reg;
-reg [7:0] sram_req_bsel_reg;
-reg [15:0] sram_req_address_reg_next;
-reg [3:0] sram_req_sramid_reg_next;
-reg [63:0] sram_data_reg_next;
-reg [7:0] sram_req_bsel_reg_next;
+reg [`JTAG_ADDRESS_INDEX_WIDTH-1:0] sram_req_address_reg;
+reg [`JTAG_ADDRESS_SRAMID_WIDTH-1:0] sram_req_sramid_reg;
+reg [`JTAG_DATA_REQ_WIDTH-1:0] sram_data_reg;
+reg [`JTAG_ADDRESS_BSEL_WIDTH-1:0] sram_req_bsel_reg;
+
+reg [`JTAG_ADDRESS_INDEX_WIDTH-1:0] sram_req_address_reg_next;
+reg [`JTAG_ADDRESS_SRAMID_WIDTH-1:0] sram_req_sramid_reg_next;
+reg [`JTAG_DATA_REQ_WIDTH-1:0] sram_data_reg_next;
+reg [`JTAG_ADDRESS_BSEL_WIDTH-1:0] sram_req_bsel_reg_next;
 reg sram_req_rw;
 reg sram_req_rw_next;
 ////////////////////////////////
@@ -279,17 +279,17 @@ begin
             if (req_op == `JTAG_REQ_OP_READ_SRAM || req_op == `JTAG_REQ_OP_WRITE_SRAM)
             begin
                 // sram_req_val = 1'b1;
-                sram_req_address_reg_next[15:0] = req_address_index[15:0];
-                sram_req_sramid_reg_next[3:0] = req_address_sramid;
-                sram_req_bsel_reg_next[7:0] = req_address_bsel;
+                sram_req_address_reg_next = req_address_index;
+                sram_req_sramid_reg_next = req_address_sramid;
+                sram_req_bsel_reg_next = req_address_bsel;
                 state_next = `RTAP_STATE_SRAM_0;
-                state_counter_next = 0; // only 1 cycle to transfer sramid
+                state_counter_next = 1; // 2 cycles to transfer sramid
                 if (req_op == `JTAG_REQ_OP_READ_SRAM)
                     sram_req_rw_next = 1'b0;
                 else
                 begin
                     sram_req_rw_next = 1'b1;
-                    sram_data_reg_next = req_data[63:0];
+                    sram_data_reg_next = req_data;
                 end
             end
         end
@@ -298,7 +298,7 @@ begin
         begin
             // write the req sramid
             sram_req_op = `BIST_OP_SHIFT_ID;
-            sram_req_dataout[3:0] = sram_req_sramid_reg[3:0];
+            sram_req_dataout[3:0] = (state_counter == 0) ? sram_req_sramid_reg[3:0] : sram_req_sramid_reg[7:4];
             if (state_counter == 0)
             begin
                 state_next = `RTAP_STATE_SRAM_1;
@@ -339,7 +339,8 @@ begin
             begin
                 if (sram_req_rw == 1'b0)
                 begin
-                    state_next = `RTAP_STATE_SRAM_READ_3;
+                    state_next = sram_req_sramid_reg[7:6] == 2'b10 ? `RTAP_STATE_SRAM_READ_EFUSE_3 :
+                                 `RTAP_STATE_SRAM_READ_3;
                 end
                 else
                     state_next = `RTAP_STATE_SRAM_WRITE_3;
@@ -356,6 +357,13 @@ begin
         begin
             // issue read
             sram_req_op = `BIST_OP_READ;
+            state_next = `RTAP_STATE_SRAM_READ_4;
+        end
+
+        `RTAP_STATE_SRAM_READ_EFUSE_3:
+        begin
+            // issue efuse read
+            sram_req_op = `BIST_OP_READ_EFUSE;
             state_next = `RTAP_STATE_SRAM_READ_4;
         end
 
@@ -402,7 +410,8 @@ begin
             sram_data_reg_next = {sram_data_reg[59:0], srams_rtap_data[3:0]};
             if (state_counter == 0)
             begin
-                state_next = `RTAP_STATE_SRAM_WRITE_4;
+                state_next = sram_req_sramid_reg[7:6] == 2'b10 ? `RTAP_STATE_SRAM_FUSE :
+                            `RTAP_STATE_SRAM_WRITE_4;
             end
             else
             begin
@@ -415,14 +424,21 @@ begin
         begin
             // send write command
             sram_req_op = `BIST_OP_WRITE;
-            // res_op_next = `RTAP_RET_OP_ACK;
+            sram_res_val = 1'b1;
+            state_next = `RTAP_STATE_INIT;
+        end
+
+        `RTAP_STATE_SRAM_FUSE:
+        begin
+            // send write command
+            sram_req_op = `BIST_OP_WRITE_EFUSE;
             sram_res_val = 1'b1;
             state_next = `RTAP_STATE_INIT;
         end
     endcase
 
     rtap_arb_req_val = 0;
-    rtap_arb_req_data[63:0] = 0;
+    rtap_arb_req_data = 0;
     rtap_arb_req_threadid[1:0] = 0;
 
     judi_op_val = 0;
@@ -436,13 +452,6 @@ begin
     rtap_config_write_req_data = 0;
 
     case (req_op)
-        // `JTAG_REQ_OP_CPX_INTERRUPT:
-        // begin
-        //     res_op_next = `RTAP_RET_OP_ACK;
-        //     rtap_arb_req_val = 1'b1;
-        //     rtap_arb_req_data[63:0] = req_data[63:0];
-        //     rtap_arb_req_threadid[1:0] = req_threadid[1:0];
-        // end
         `JTAG_REQ_OP_READ_RTAP:
         begin
             case (req_misc)
@@ -468,12 +477,36 @@ begin
                     judi_op_id = `JTAG_CORE_ID_IRF;
                     judi_op_data = req_address;
                 end
+                `JTAG_RTAP_ID_RPC_REG:
+                begin
+                    // res_op_next = `RTAP_RET_OP_CORE_DATA;
+                    judi_op_threadid = req_threadid;
+                    judi_op_val = 1'b1;
+                    judi_op_id = `JTAG_CORE_ID_RPC;
+                    judi_op_data = req_address;
+                end
+                `JTAG_RTAP_ID_DMI_REG:
+                begin
+                    // res_op_next = `RTAP_RET_OP_ACK;
+                    judi_op_threadid = req_threadid;
+                    judi_op_val = 1'b1;
+                    judi_op_id = `JTAG_CORE_ID_DMI;
+                    judi_op_data = req_address;
+                end
             endcase
         end
 
         `JTAG_REQ_OP_WRITE_RTAP:
         begin
             case (req_misc)
+                `JTAG_RTAP_ID_DMI_REG:
+                begin
+                    // res_op_next = `RTAP_RET_OP_ACK;
+                    judi_op_threadid = req_threadid;
+                    judi_op_val = 1'b1;
+                    judi_op_id = `JTAG_CORE_ID_DMI;
+                    judi_op_data = {req_data,req_address[29:0]};
+                end
                 `JTAG_RTAP_ID_PC_REG:
                 begin
                     // res_op_next = `RTAP_RET_OP_ACK;
@@ -510,7 +543,7 @@ begin
                 begin
                     res_op_next = `RTAP_RET_OP_ACK;
                     rtap_arb_req_val = 1'b1;
-                    rtap_arb_req_data[63:0] = req_data[63:0];
+                    rtap_arb_req_data = req_data;
                     rtap_arb_req_threadid[1:0] = req_threadid[1:0];
                 end
                 `JTAG_RTAP_ID_CONFIGREGS_REG:
@@ -561,7 +594,6 @@ always @ *
 begin
     res_val = 0;
     res_data = 0;
-    // res_vec = 0;
 
     if (judi_op_val_ff)
     begin
@@ -572,7 +604,7 @@ begin
     if (sram_res_val_f)
     begin
         res_val = 1'b1;
-        res_data = sram_data_reg;
+        res_data = {sram_data_reg,sram_data_reg};
     end
     else case (res_op)
         `RTAP_RET_OP_ACK:

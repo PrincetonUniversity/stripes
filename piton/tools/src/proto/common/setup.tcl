@@ -97,6 +97,24 @@ if {[info exists ::env(PITON_ARIANE)]} {
   append ALL_DEFAULT_VERILOG_MACROS " PITON_ARIANE PITON_RV64_PLATFORM PITON_RV64_DEBUGUNIT PITON_RV64_CLINT PITON_RV64_PLIC WT_DCACHE"
 }
 
+if {[info exists ::env(DECADES_DECOUPLING)]} {
+  append ALL_DEFAULT_VERILOG_MACROS " DECADES_DECOUPLING"
+  set DECADES_DECOUPLING_FLAG 1
+} else {
+  set DECADES_DECOUPLING_FLAG 0
+}
+
+if {[info exists ::env(DECADES_CHIP)]} {
+  append ALL_DEFAULT_VERILOG_MACROS " DECADES_CHIP"
+  set DECADES_CHIP_FLAG 1
+} else {
+  set DECADES_CHIP_FLAG 0
+}
+
+if {[info exists ::env(PITON_NIBBLER)]} {
+  append ALL_DEFAULT_VERILOG_MACROS " PITON_NIBBLER"
+}
+
 for {set k 0} {$k < $::env(PITON_NUM_TILES)} {incr k} {
   if {[info exists "::env(RTL_ARIANE$k)"]} {
     append ALL_DEFAULT_VERILOG_MACROS " RTL_ARIANE$k"
@@ -121,7 +139,7 @@ set ALL_INCLUDE_FILES [pyhp_preprocess ${ALL_INCLUDE_FILES}]
 
 
 if  {[info exists ::env(PITON_ARIANE)]} {
-  puts "INFO: compiling DTS and bootroms for Ariane (MAX_HARTS=$::env(PITON_NUM_TILES), UART_FREQ=$env(CONFIG_SYS_FREQ))..."
+  puts "INFO: compiling DTS and bootroms for Ariane (MAX_HARTS=$::env(PITON_RV64_TILES), UART_FREQ=$env(CONFIG_SYS_FREQ))..."
   
   
   # credit goes to https://github.com/PrincetonUniversity/openpiton/issues/50 
@@ -141,14 +159,8 @@ if  {[info exists ::env(PITON_ARIANE)]} {
   # Note: dd dumps info to stderr that we do not want to interpret
   # otherwise this command fails...
   exec make clean 2> /dev/null
-  exec make all MAX_HARTS=$::env(PITON_NUM_TILES) UART_FREQ=$::env(CONFIG_SYS_FREQ) 2> /dev/null
+  exec make all MAX_HARTS=$::env(PITON_RV64_TILES) PITON_RV64_X_TILES=$::env(PITON_RV64_X_TILES) PITON_RV64_Y_TILES=$::env(PITON_RV64_Y_TILES) DECADES_DECOUPLING=${DECADES_DECOUPLING_FLAG} DECADES_CHIP=${DECADES_CHIP_FLAG} UART_FREQ=$::env(CONFIG_SYS_FREQ) 2> /dev/null
   puts "INFO: done"
-  # two targets per hart (M,S) and two interrupt sources (UART, Ethernet)
-  set NUM_TARGETS [expr 2*$::env(PITON_NUM_TILES)]
-  set NUM_SOURCES 2
-  puts "INFO: generating PLIC for Ariane ($NUM_TARGETS targets, $NUM_SOURCES sources)..."
-  cd $::env(ARIANE_ROOT)/corev_apu/rv_plic/rtl
-  exec ./gen_plic_addrmap.py -t $NUM_TARGETS -s $NUM_SOURCES > plic_regmap.sv
 
   cd $TMP
   puts "INFO: done"

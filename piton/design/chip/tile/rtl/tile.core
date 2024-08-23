@@ -14,6 +14,7 @@ filesets:
             - openpiton::dynamic_node
             - openpiton::l15
             - openpiton::l2
+            - openpiton::is
             - openpiton::sparc_core
             - openpiton::fpu
             - openpiton::dmbr

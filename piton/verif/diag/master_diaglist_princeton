@@ -2101,6 +2101,11 @@ alu_tsub_rand                           arch_alu.pal  -midas_args=-pal_diag_args
 #include "princeton/princeton_bicc.diaglist"
 #include "princeton/princeton_fbfcc.diaglist"
 
+<jtag_ariane sys=jtag_testbench -x_tiles=2 -y_tiles=1 -ariane>
+<jtag_default name=JTAG_ARIANE>
+#include "princeton/princeton_jtag_ariane.diaglist"
+</jtag_default>
+</jtag_ariane>
 
 <jtag sys=jtag_testbench -x_tiles=1 -y_tiles=1>
 <jtag_default name=JTAG>

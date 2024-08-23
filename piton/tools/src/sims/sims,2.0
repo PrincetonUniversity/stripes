@@ -131,6 +131,10 @@ Getopt::Long::Configure ('no_auto_abbrev') ;
         'asm_diag_path' => "",
         'asm_diag_root' => [],
         'build' => 1,
+        'decades_chip' => 0,
+        'prga_ctrl_x_tile' => -1,
+        'prga_ctrl_y_tile' => -1,
+        'rvic' => 0,
         'config_rtl' => [],
         'config_cpp_args' => [],
         'copyall' => 0,
@@ -143,6 +147,7 @@ Getopt::Long::Configure ('no_auto_abbrev') ;
         'fast_boot' => 0,
         'finish_mask' => "",
         'flist' => [],
+        'flist_vhdl' => [],
         'gcc_args' => [],
         'group' => [],
         'group_name' => "",
@@ -165,6 +170,8 @@ Getopt::Long::Configure ('no_auto_abbrev') ;
         'msm_build' => 0,
         'msm_build_args' => [],
         'msm_run' => 0,
+        'nibbler' => 0,
+        'decoupling' => 0,
         'ncv_build' => 0,
         'ncv_build_args' => [],
         'ncv_run' => 0,
@@ -177,6 +184,8 @@ Getopt::Long::Configure ('no_auto_abbrev') ;
         'pico_het' => 0,
         'post_process_cmd' => [],
         'pre_process_cmd' => [],
+        'prga' => 0,
+        'prga_mock_app' => "",
         'reg_count' => 0,
         'regress' => 0,
         'regress_date' => "",
@@ -187,10 +196,11 @@ Getopt::Long::Configure ('no_auto_abbrev') ;
         'result_dir' => "",
         'riv_build' => 0,
         'riv_build_args' => [],
-        'riv_run' => 0,		
+        'riv_run' => 0,
         'rtl_timeout' => 5000,
         'run_diag_pl' => 1,
         'rv32' => 0,
+        'rv32asm' => 0,
         'rv32_mabi=s' => "",
         'rv32_march=s' => "",
         'rv32_target_triple=s' => "",
@@ -213,6 +223,7 @@ Getopt::Long::Configure ('no_auto_abbrev') ;
         'sparcv9' => 0,
         'sys' => "",
         'tg_seed' => -1,
+        'pyocn' => 1,
         'tmp_dir' => ".",
         'toplevel' => [],
         'tarcopy' => 0,
@@ -237,6 +248,7 @@ Getopt::Long::Configure ('no_auto_abbrev') ;
         'vlt_run' => 0,
         'version' => 0,
         'vfile' => [],
+        'vhdlfile' => [],
         'mem_init_py' => ""
        );
 
@@ -317,6 +329,7 @@ if (($opt{injobq} == 1) or $opt{interactive}) {
 
 GetOptions (\%opt,
             'alias=s',
+            'decades_chip!',
             'config_cpp_args=s@',
             'debug' => \$opt_debug,
             'diaglist=s',
@@ -326,10 +339,19 @@ GetOptions (\%opt,
             'parallel!',
             'ost1!',
             'ariane!',
+            'nibbler!',
+            'decoupling!',
             'pico!',
             'pico_het!',
+            'prga!',
+            'prga_mock_app=s',
+            'prga_ctrl_x_tile=i',
+            'prga_ctrl_y_tile=i',
+            'rvic!',
+            'pyocn!',
             'sparcv9!',
             'rv32!',
+            'rv32asm!',
             'rv64!',
             'rv64_platform!',
             'regress!',
@@ -345,11 +367,24 @@ GetOptions (\%opt,
            ) ;
 
 die ("DIE. -ariane and -pico/-pico_het cannot be set simultaneously") if ($opt{ariane} && ($opt{pico} || $opt{pico_het})) ;
+die ("DIE. -nibbler and -pico/-pico_het cannot be set simultaneously") if ($opt{nibbler} && ($opt{pico} || $opt{pico_het})) ;
 die ("DIE. -pico and -pico_het cannot both be set") if ($opt{pico} && $opt{pico_het}) ;
+
+if ($opt{decades_chip}) {
+    $opt{ariane} = 1 ;
+    $opt{prga} = 1 ;
+    $opt{nibbler} = 1 ;
+    $opt{decoupling} = 1 ;
+    $opt{pyocn} = 1 ;
+    $opt{network_config} = "pyocn_router_config" ;
+    $opt{prga_ctrl_x_tile} = 0 ;
+    $opt{prga_ctrl_y_tile} = 3 ;
+    $opt{rvic} = 1 ;
+}
 
 # Setting ost1 by default. This works better than default to 1
 # for heterogeneous-ISA stuff
-if (!$opt{pico} && !$opt{ariane}) {
+if (!$opt{pico} && !$opt{ariane} && !$opt{nibbler} && !$opt{prga}) {
   $opt{ost1} = 1 ;
 }
 
@@ -357,6 +392,17 @@ push (@{$opt{config_cpp_args}}, "-DFLIST_OST1")     if ($opt{ost1} || $opt{pico_
 push (@{$opt{config_cpp_args}}, "-DFLIST_PICO")     if ($opt{pico} || $opt{pico_het}) ;
 push (@{$opt{config_cpp_args}}, "-DFLIST_ARIANE")   if ($opt{ariane}) ;
 push (@{$opt{config_cpp_args}}, "-DFLIST_ORAM")     if ($opt{oram}) ;
+push (@{$opt{config_cpp_args}}, "-DFLIST_PYOCN")    if ($opt{pyocn}) ;
+push (@{$opt{config_cpp_args}}, "-DFLIST_PRGA")     if ($opt{prga} || $opt{rvic}) ;
+
+if ($opt{prga} && ($opt{prga_mock_app} ne "")) {
+    my $flist_prga_mock_app = sprintf "-DPITON_PRGA_MOCK_APP=%s", $opt{prga_mock_app};
+    push (@{$opt{config_cpp_args}}, $flist_prga_mock_app) ;
+}
+
+push (@{$opt{config_cpp_args}}, "-DFLIST_DCP")      if ($opt{decoupling}) ;
+push (@{$opt{config_cpp_args}}, "-DFLIST_NIBBLER")  if ($opt{nibbler} || $opt{decoupling}) ;
+push (@{$opt{config_cpp_args}}, "-DFLIST_ACC")      if ($opt{decades_chip}) ;
 
 ################################################################################
 # define $result_dir
@@ -603,6 +649,7 @@ sub run_injobq
     print JOBCMD "#SBATCH --mem=2048              # mem=2GB\n" ;
     print JOBCMD "#SBATCH -t 3:20:00               # walltime=1hr6mins\n" ;
     print JOBCMD "#SBATCH -J  $opt{jobcommand_name} # jobname\n\n" ;
+    print JOBCMD "#SBATCH --licenses=VCS               # licenses=VCS\n" ;
   }
 
   my $os = `uname -s`;
@@ -1112,7 +1159,6 @@ sub gen_flist
 
   foreach my $flist (@{$opt{flist}}) {
     $flist =~ s/\$(\w+)/$ENV{$1}/g ;
-
     # look for IBM flists
     if ($opt{ibm}) {
        my $ibmflist = $flist . ".ibm";
@@ -1166,14 +1212,18 @@ sub gen_flist
       # Now we run pyphp
 
       my $ibmfile = (split(' ',substr($line, 0, -1)))[-1] . ".ibm.v";
+
       if ($opt{ibm} and -e $ibmfile) {
            $line = $ibmfile . "\n";
            # print("debug: IBM sram found: $line\n");
       } else {
-        my $linepyv = (split(' ',substr($line, 0, -1)))[-1] . ".pyv";
-        # print("\$linepyv is $linepyv\n");
-        my $linetmp = substr($line, 0, -3) . ".tmp.". substr($line, -2, 1);
-        my $linetmpout = (split(' ',substr($line, 0, -3)))[-1] . ".tmp." . substr($line, -2, 1);
+        my @splitted = split(/\./, $line);
+        my $ext = $splitted[-1];
+
+        my $linepyv = (split(' ', $line))[-1] . ".pyv";
+        my $linetmp = join('.', @splitted[0..$#splitted-1]) . ".tmp." . $ext;
+        my $linetmpout = (split(' ', $linetmp))[-1];
+
         if (-e $linepyv) {
           # print("original is $line\n");
           !system("pyhp.py $linepyv > $linetmpout") or die("Error running PyHP for $linepyv\n");;
@@ -1188,6 +1238,68 @@ sub gen_flist
   }
 
   foreach my $file (@{$opt{vfile}}) {
+    chomp $file ;
+    $file =~ s/\$(\w+)/$ENV{$1}/g ;
+    print OFLIST "$file\n" ;
+  }
+
+  close (OFLIST) ;
+}
+
+sub gen_flist_vhdl
+{
+  open (OFLIST, ">flist_vhdl") or die ("DIE. can't open flist_vhdl file") ;
+
+  foreach my $flist_vhdl (@{$opt{flist_vhdl}}) {
+    $flist_vhdl =~ s/\$(\w+)/$ENV{$1}/g ;
+
+    open (IFLIST, "< $flist_vhdl") or die ("DIE. can't open flist_vhdl file $flist_vhdl") ;
+
+    print "$flist_vhdl\n";
+
+    while (<IFLIST>) {
+      my $line = $_ ;
+      my $base = dirname ($flist_vhdl) ;
+
+      $line =~ s/^\s*(.*?)\s*$/$1/ ;
+      $line .= "\n" ;
+
+      if (($line =~ /^\s*\/\//) or ($line =~ /^\s*$/)) {
+        next ;
+      }
+
+      $line =~ s/\$(\w+)/$ENV{$1}/g ;
+
+      if ($line =~ /^\+incdir\+\//)
+      { }
+      elsif ($line =~ /^\+incdir\+/) {
+        $line =~ s/^\+incdir\+(.*)/\+incdir\+$base\/$1/ ;
+      }
+      elsif ($line =~ /^\-v\s\//)
+      { }
+      elsif ($line =~ /^\-v/) {
+        $line =~ s/-v\s*(.*)/-v $base\/$1/ ;
+      }
+      elsif ($line =~ /^-y\s\//)
+      { }
+      elsif ($line =~ /^-y/) {
+        $line =~ s/-y\s*(.*)/-y $base\/$1/ ;
+      }
+      elsif (($line =~ /^\+define/) or
+             ($line =~ /^\+libext/) or
+             ($line =~ /^\+librescan/))
+      { }
+      elsif ($line !~ /^\//) {
+        $line = "$base/$line" ;
+      }
+
+      print OFLIST $line ;
+    }
+
+    close (IFLIST) ;
+  }
+
+  foreach my $file (@{$opt{vhdlfile}}) {
     chomp $file ;
     $file =~ s/\$(\w+)/$ENV{$1}/g ;
     print OFLIST "$file\n" ;
@@ -1264,23 +1376,37 @@ sub pre_build
 
   # Generate the flist file
   &gen_flist ();
+  &gen_flist_vhdl ();
 
   system("cp -f flist $cur_dir");
+  system("cp -f flist_vhdl $cur_dir") if (@{$opt{flist_vhdl}});
 
-  if($opt{rv64_platform}) {
+  # TODO check if rv64_platform is defined. if only -ariane is set
+  # check if we need to generate PLIC
+  if($opt{rv64_platform} and !$opt{decades_chip}) {
     print "compiling rv64 DTS and bootroms...\n";
     !system("cd $ENV{DV_ROOT}/design/chipset/rv64_platform/bootrom/baremetal && make clean && make all && cd - > /dev/null") or
       die (" Error compiling rv64 DTS.");
-    !system("cd $ENV{DV_ROOT}/design/chipset/rv64_platform/bootrom/linux && make clean && make all MAX_HARTS=$ENV{PITON_NUM_TILES} && cd - > /dev/null") or
+    !system("cd $ENV{DV_ROOT}/design/chipset/rv64_platform/bootrom/linux && make clean && make all MAX_HARTS=$ENV{PITON_RV64_TILES} PITON_RV64_X_TILES=$ENV{PITON_RV64_X_TILES} PITON_RV64_Y_TILES=$ENV{PITON_RV64_Y_TILES} DECADES_DECOUPLING=$ENV{DECADES_DECOUPLING} DECADES_CHIP=$ENV{DECADES_CHIP} && cd - > /dev/null") or
       die (" Error compiling rv64 DTS.");
     print "done\n";
     # currently we have two sources (hardcoded in chipset_impl): UART and Ethernet
     my $num_sources = 2;
     # 2 targets per core (M/S mode)
     my $num_targets = 2 * $ENV{PITON_NUM_TILES};
-    print "generating PLIC for rv64 platform with $num_targets targets and $num_sources sources...\n";
-    !system("cd $ENV{ARIANE_ROOT}/corev_apu/rv_plic/rtl && ./gen_plic_addrmap.py -t $num_targets -s $num_sources > plic_regmap.sv") or
-      die (" Error generating PLIC for rv64 platform.");
+    # TODO use the rv_plic under rv64_platform, no need to generate plic here. Not verified yet.
+    # print "generating PLIC for rv64 platform with $num_targets targets and $num_sources sources...\n";
+    # !system("cd $ENV{ARIANE_ROOT}/corev_apu/rv_plic/rtl && ./gen_plic_addrmap.py -t $num_targets -s $num_sources > plic_regmap.sv") or
+    #   die (" Error generating PLIC for rv64 platform.");
+    # print "done\n";
+  }
+
+  if($opt{decades_chip}) {
+    print "compiling DTS and bootroms for Ariane...\n";
+    !system("cd $ENV{DV_ROOT}/design/chipset/rv64_platform/bootrom/baremetal && make clean && make all && cd - > /dev/null") or
+      die (" Error compiling DTS for ariane.");
+    !system("cd $ENV{DV_ROOT}/design/chipset/rv64_platform/bootrom/linux && make clean && make all MAX_HARTS=$ENV{PITON_RV64_TILES} PITON_RV64_X_TILES=$ENV{PITON_RV64_X_TILES} PITON_RV64_Y_TILES=$ENV{PITON_RV64_Y_TILES} DECADES_DECOUPLING=$ENV{DECADES_DECOUPLING} DECADES_CHIP=$ENV{DECADES_CHIP} && cd - > /dev/null") or
+      die (" Error compiling DTS for ariane.");
     print "done\n";
   }
 
@@ -1336,7 +1462,12 @@ sub generic_sim_build
       print "$prg: LM_LICENSE_FILE : none\n";
     }
 
-    push (@{$opt{sim_build_args}}, "-f flist") ;
+    # For the case of building mixed language with vcs,
+    # we don't need flist for the elaboration step.
+    # In that case, flist would be added to commands vlogan and vhdlan. 
+    if (!$opt{vcs_build} || !@{$opt{flist_vhdl}}) {
+      push (@{$opt{sim_build_args}}, "-f flist");
+    }
 
     if ($opt{vcs_build}) {
       $lib_path = "-L$ENV{DV_ROOT}/tools/";
@@ -1365,6 +1496,22 @@ sub generic_sim_build
       push (@{$opt{vcs_build_args}}, "+lint=all,noVCDE,noVNGS,noPCTIO-L,noPCTIO");
       push (@{$opt{vcs_build_args}}, "+warn=all");
       push (@{$opt{vcs_build_args}}, "-l compile.log") ;
+
+      if (!@{$opt{flist_vhdl}}) {
+        push (@{$opt{vcs_build_args}}, "+verilog2001ext+.v") ;
+      }
+
+      # some SystemVerilog-specific options
+      if ($opt{ariane}) {
+        if (!@{$opt{flist_vhdl}}) {
+          push (@{$opt{vcs_build_args}}, "-sverilog +systemverilogext+.sv") ;
+        }
+        push (@{$opt{vcs_build_args}}, "-ntb_opts uvm-1.1 +vpi ") ;
+        # unshift (@{$opt{vcs_build_args}}, "-ntb_opts uvm-1.1 +vpi ") ;
+      }
+      elsif ($opt{pyocn}) {
+          push (@{$opt{vcs_build_args}}, "-sverilog +systemverilogext+.sv") ;
+      }
 
       if ($opt{ibm}) {
           push (@{$opt{config_rtl}}, "IBM_SRAM_RF16X160_MODEL_CHECKER") ;
@@ -1433,7 +1580,13 @@ sub generic_sim_build
     if ($opt{vcs_build}) {
       foreach my $x (@{$opt{vcs_build_args}})
       {
-          push (@{$opt{sim_build_args}}, $x);
+          # In -sim_pll case, SDF annotation is necessary,
+          # but timing checks shall still be ignored:
+          if ($opt{sim_pll} && $x eq "+nospecify") {
+              push (@{$opt{sim_build_args}}, "+notimingcheck");
+          } else {
+              push (@{$opt{sim_build_args}}, $x);
+          }
       }
     }
     if ($opt{ncv_build}) {
@@ -1480,14 +1633,26 @@ sub generic_sim_build
     # build the model
     print "$prg: Building rtl model\n" ;
 
+    my $build_cmd_vhdl;
     if ($opt{vcs_build}) {
       if ($ENV{VCS_BIN}) {
         $build_cmd = "$ENV{VCS_BIN} ";
+      } elsif (@{$opt{flist_vhdl}}) {
+        $build_cmd = " " ;
       } else {
         $build_cmd  = "vcs " ;
       }
       # lib_path needs to be before vcs_build_args
       $build_cmd .= $lib_path;
+
+      # the ariane files do not contain the timescale
+      if ($opt{ariane}) {
+        $build_cmd .= " -timescale=1ps/1ps ";
+      }
+
+      if (@{$opt{flist_vhdl}}) {
+        $build_cmd_vhdl = "vhdlan -full64 ";
+      }
     }
     if ($opt{ncv_build}) {
       $build_cmd = "LD_LIBRARY_PATH=";
@@ -1499,16 +1664,17 @@ sub generic_sim_build
       $build_cmd .= " ";
     }
     if ($opt{msm_build}) {
-      $build_cmd = "vlog" ;
-      if ($ENV{MODELSIM_VERSION}) {
-        $build_cmd .= "$ENV{MODELSIM_VERSION}" ;
-      }
-      # compile everything as one compile unit (in order to keep the global defines in config.v)
-      $build_cmd .= " -mfcu ";
-      # also suppress the following warning, which unfortunately is hardly avoidable when using
-      # always_comb blocks that operate on arrays inside a generate statement.
-      # [SVCHK] - Some checking for conflicts with always_comb and always_latch variables not yet supported.
-      $build_cmd .= " -suppress 2583 ";
+    $build_cmd = "vlog" ;
+    if ($ENV{MODELSIM_VERSION}) {
+      $build_cmd .= "$ENV{MODELSIM_VERSION}" ;
+    }
+    # compile everything as one compile unit (in order to keep the global defines in config.v)
+    $build_cmd .= " -mfcu ";
+    # also suppress the following warning, which unfortunately is hardly avoidable when using
+    # always_comb blocks that operate on arrays inside a generate statement.
+    # [SVCHK] - Some checking for conflicts with always_comb and always_latch variables not yet supported.
+    $build_cmd .= " -suppress 2583 ";
+
     }
     if ($opt{riv_build}) {
       $build_cmd = "vlib work; vlog " ;
@@ -1565,8 +1731,37 @@ sub generic_sim_build
     rename "flist", "flist.orig" or die ("DIE. can't rename flist");
     rename "flist.new", "flist" or die ("DIE. can't rename flist.new");
 
-    print "$prg: $build_cmd\n";
+    if ($opt{vcs_build} && @{$opt{flist_vhdl}}) {
+      if ($opt{ariane}) {
+        my $vlog_build_cmd = "vlogan -full64 -nc -ntb_opts uvm-1.1 " ;
+        print "$prg: $vlog_build_cmd\n";
 
+        if (! $opt{dryrun}) {
+          system ($vlog_build_cmd) ;
+          die ("DIE. failed building model") if ($?) ;
+        }
+      }
+      my $vlog_build_cmd = "vlogan -full64 -nc " . $build_cmd . " -work work -f flist +verilog2001ext+.v +systemverilogext+.sv";
+
+      print "$prg: $vlog_build_cmd\n";
+
+      if (! $opt{dryrun}) {
+          system ($vlog_build_cmd) ;
+          die ("DIE. failed building model") if ($?) ;
+      }
+
+      $build_cmd = "vcs " . $build_cmd ;
+    }
+
+    if ((@{$opt{flist_vhdl}}) and !(-z "flist_vhdl")) {
+        print "$prg: $build_cmd_vhdl\n";
+        if (! $opt{dryrun}) {
+          system ($build_cmd_vhdl) ;
+          die ("DIE. failed building model") if ($?) ;
+        }
+    }
+
+    print "$prg: $build_cmd\n";
     if (! $opt{dryrun}) {
       system ($build_cmd) ;
       die ("DIE. failed building model") if ($?) ;
@@ -1607,6 +1802,8 @@ sub generic_sim_run
     # copy the flist over
     system ("cp -f $model_path/flist .") ;
     die ("DIE. could not copy flist to $ENV{PWD}") if ($?) ;
+    system ("cp -f $model_path/flist_vhdl .") ;
+    die ("DIE. could not copy flist_vhdl to $ENV{PWD}") if ($?) ;
 
     # verify that a model was compiled
     die ("DIE. simv not found in $model_path") if ($opt{vcs_run} and ! -e "$model_path/simv") ;
@@ -1742,6 +1939,7 @@ sub generic_sim_run
       }
       $cmd .= "-lib ";
       $cmd .= "$model_path/work ";
+
       $cmd .= "-do \"run -all\" ";
 
       foreach my $top_n (@{$opt{toplevel}}) {
@@ -2163,19 +2361,11 @@ sub get_tvers_from_iver {
 sub assemble_diag
 {
     # first clean up the diag area
-    `rm -rf diag.pal diag.s diag.S diag.pl diag.exe mem.image diag.ev symbol.tbl` ;
+    `rm -rf diag.pal diag.s diag.S diag.pl diag.exe diag.dump diag.objdump mem.image diag.ev symbol.tbl` ;
     die "DIE. could not clean up assembly diag run area"  if ($?) ;
 
-    # add default path to look for precompiled RISCV 64bit assembly tests diags
-    if ($opt{ariane} and $opt{precompiled}) {
-      push @{$opt{asm_diag_root}}, "$ENV{ARIANE_ROOT}/tmp/riscv-tests/build/isa";
-      push @{$opt{asm_diag_root}}, "$ENV{ARIANE_ROOT}/tmp/riscv-tests/build/benchmarks";
-    }
-
-    # find diagnostic
-    my $diag_full_path = &find_diag_path ($opt{asm_diag_name}, $opt{asm_diag_path}, $opt{asm_diag_root}) ;
-
     my $diag_name ;
+    my $rv32_diag_name;
     if ($opt{asm_diag_name} =~ /\.pal/)        { $diag_name = "diag.pal"  ; }
     elsif ($opt{asm_diag_name} =~ /\.s\.gz/)   { $diag_name = "diag.s.gz" ; }
     elsif ($opt{precompiled} and ($opt{rv32} | $opt{rv64})) { $diag_name = "diag.exe"  ; }
@@ -2183,43 +2373,8 @@ sub assemble_diag
     elsif (($opt{rv32} | $opt{rv64}) and ($opt{asm_diag_name} =~ /\.c/)) { $diag_name = "diag.c" ; }
     else { $diag_name = "diag.s" ; }
 
-    # copy diagnostic to run area
-    `cp $diag_full_path $diag_name` ;
-    die ("DIE. unable to copy assembly diag to $ENV{PWD}") if ($?) ;
-    `chmod +w $diag_name` ;
-    die ("DIE. unable to permission of assembly diag") if ($?) ;
-
-    # gunzip if needed
-    if ($opt{asm_diag_name} =~ /\.s\.gz/) {
-      `gzip -d diag.s.gz` ;
-      die ("DIE. unable to gunzip assembly diag") if ($?) ;
-      $diag_name = "diag.s" ;
-    }
-
-    $ENV{ASM_DIAG_NAME} = $opt{asm_diag_name};
-    $ENV{ASM_DIAG_NAME_NO_EXT} = substr $opt{asm_diag_name}, 0, -2;
-
-    # pre process if needed
-    &pre_process ;
-
-    # extract sims options from diag.s
-    if (($diag_name =~ /\.s/) or ($diag_name =~ /\.S/)) {
-      open (DIAGIN, "< $diag_name") or die "DIE. Could not open $diag_name" ;
-
-      while (<DIAGIN>) {
-        my $line = $_ ;
-
-        if ($line =~ /^\!SIMS\+ARGS\:/) {
-          my (@plusargs) = split (/\s+/, $line) ;
-          shift (@plusargs) ;
-          push (@ARGV, @plusargs) ;
-          print "$prg: Found sims arguments in $diag_name: @plusargs\n" ;
-          parse_args ("dummy", 0) ;
-        }
-      }
-
-      close (DIAGIN) ;
-    }
+    if ($opt{rv32asm}) { $rv32_diag_name = "diag.S" ; }
+    else { $rv32_diag_name =  $diag_name ; }
 
     # Choose compilation flow based on ISA
     if ($opt{rv32}) {
@@ -2228,12 +2383,18 @@ sub assemble_diag
         if ($opt{pico}) {
           $ENV{RV32_TARGET_TRIPLE} = "riscv32-unknown-elf" ;
         }
+        if ($opt{nibbler}) {
+          $ENV{RV32_TARGET_TRIPLE} = "riscv32-rvv-linux-gnu" ;
+        }
       } else {
         $ENV{RV32_TARGET_TRIPLE} = $opt{rv32_target_triple} ;
       }
       if (!$opt{rv32_march}) {
         if ($opt{pico}) {
           $ENV{RV32_MARCH} = "rv32ima" ;
+        }
+        if ($opt{nibbler}) {
+          $ENV{RV32_MARCH} = "rv32i" ;
         }
       } else {
         $ENV{RV32_MARCH} = $opt{rv32_march} ;
@@ -2242,16 +2403,62 @@ sub assemble_diag
         if ($opt{pico}) {
           $ENV{RV32_MABI} = "ilp32" ;
         }
+        if ($opt{nibbler}) {
+          $ENV{RV32_MABI} = "ilp32" ;
+        }
       } else {
         $ENV{RV32_MABI} = $opt{rv32_mabi} ;
       }
+      if (!$opt{rv32_core}) {
+        if ($opt{nibbler}) {
+          $ENV{RV32_CORE} = "nibbler" ;
+        }
+      }  else {
+        $ENV{RV32_CORE} = $opt{rv32_core} ;
+      }
+      
+      my @rv32_asm_diag_root ;
+      my $rv32_asm_diag_name ;
+
+      if ($opt{rv32} && $opt{rv64}) {
+        push @{rv32_asm_diag_root}, "$ENV{PITON_ROOT}/piton/verif/diag/c/riscv/$ENV{RV32_CORE}";
+        push @{rv32_asm_diag_root}, "$ENV{PITON_ROOT}/piton/verif/diag/assembly/rv32";
+        if ($opt{rv32asm}) {
+          # Overwrite extension to be .S
+            $rv32_asm_diag_name = "rv32_" . (substr ($opt{asm_diag_name}, 0, -2)) . ".S";
+        } else {
+          $rv32_asm_diag_name = "rv32_" . $opt{asm_diag_name} ;
+        }
+        print "Both \$opt{rv32} and \$opt{rv64} are set, changing asm_diag_name to $rv32_asm_diag_name\n";
+      } else {
+        $rv32_asm_diag_name = $opt{asm_diag_name} ;
+        @rv32_asm_diag_root = @{$opt{asm_diag_root}} ;
+      }
+      print "@rv32_asm_diag_root\n";
+      my $diag_full_path = &find_diag_path ($rv32_asm_diag_name, $opt{asm_diag_path}, \@rv32_asm_diag_root) ;
+
+      # copy diagnostic to run area
+      `cp $diag_full_path $rv32_diag_name` ;
+      die ("DIE. unable to copy assembly diag to $ENV{PWD}") if ($?) ;
+      `chmod +w $rv32_diag_name` ;
+      die ("DIE. unable to permission of assembly diag") if ($?) ;
+
+      $ENV{ASM_DIAG_NAME} = $opt{asm_diag_name};
+      $ENV{ASM_DIAG_NAME_NO_EXT} = substr $opt{asm_diag_name}, 0, -2;
+
+      my $defs = "";
+      foreach my $additional_args (@{$opt{gcc_args}}) {
+        $defs .= " ${additional_args}";
+      }
+
+      # assembly test
       print "$prg: assembling 32bit riscv diag (RV32IM)\n" ;
-      my $cmd = "rv32_as " ;
+      my $cmd = "rv32_as \"$defs\"" ;
       #$cmd .= join (" ", @{$opt{midas_args}}) ;
       print "$prg: $cmd\n";
-
       my $waitstatus = call_program($cmd, "rv32_as.log");
       die ("DIE. rv32_as compilation error") if ($waitstatus) ;
+
 
     }
     if ($opt{rv64}) {
@@ -2277,10 +2484,49 @@ sub assemble_diag
       } else {
         $ENV{RV64_MABI} = $opt{rv64_mabi} ;
       }
+      if (!$opt{rv64_core}) {
+        if ($opt{ariane}) {
+          $ENV{RV64_CORE} = "ariane" ;
+        }
+      } else {
+        $ENV{RV64_CORE} = $opt{rv64_core} ;
+      }
+
+      # add default path to look for precompiled RISCV 64bit assembly tests diags in case of ariane
+      if ($opt{ariane} and $opt{precompiled}) {
+        push @{$opt{asm_diag_root}}, "$ENV{ARIANE_ROOT}/tmp/riscv-tests/build/isa";
+        push @{$opt{asm_diag_root}}, "$ENV{ARIANE_ROOT}/tmp/riscv-tests/build/benchmarks";
+      }
+
+      my @rv64_asm_diag_root ;
+      my $rv64_asm_diag_name ;
+
+      if ($opt{rv32} && $opt{rv64}) {
+        push @{rv64_asm_diag_root}, "$ENV{PITON_ROOT}/piton/verif/diag/c/riscv/$ENV{RV64_CORE}";
+        push @{rv64_asm_diag_root}, "$ENV{PITON_ROOT}/piton/verif/diag/assembly/rv64";
+        $rv64_asm_diag_name = "rv64_" . $opt{asm_diag_name} ;
+        print "Both \$opt{rv32} and \$opt{rv64} are set, changing asm_diag_name to $rv64_asm_diag_name\n";
+      } else {
+        $rv64_asm_diag_name = $opt{asm_diag_name} ;
+        @rv64_asm_diag_root = @{$opt{asm_diag_root}} ;
+      }
+      my $diag_full_path = &find_diag_path ($rv64_asm_diag_name, $opt{asm_diag_path}, \@rv64_asm_diag_root) ;
+
+      # copy diagnostic to run area
+      `cp $diag_full_path $diag_name` ;
+      die ("DIE. unable to copy assembly diag to $ENV{PWD}") if ($?) ;
+      `chmod +w $diag_name` ;
+      die ("DIE. unable to permission of assembly diag") if ($?) ;
+
       # only recompile if necessary
       if (!$opt{precompiled}) {
         print "$prg: assembling 64bit riscv diag (RV64IMAC)\n" ;
-        my $defs = "-DPITON_NUMTILES=$ENV{PITON_NUM_TILES} ";
+        # TODO might want to keep both NUM_TILES and RV64_TILES
+        my $defs = "-DPITON_RV64_TILES=$ENV{PITON_RV64_TILES} ";
+        $defs .= " -DPITON_RV64_X_TILES=$ENV{PITON_RV64_X_TILES} ";
+        $defs .= " -DPITON_RV64_Y_TILES=$ENV{PITON_RV64_Y_TILES} ";
+        $defs .= " -DDECADES_DECOUPLING=$ENV{DECADES_DECOUPLING} ";
+        $defs .= " -DDECADES_CHIP=$ENV{DECADES_CHIP} ";
         if ($opt{uart_dmw}) {
           $defs .= " -DPITONSTREAM ";
         }
@@ -2329,6 +2575,43 @@ sub assemble_diag
     }
     if ($opt{sparcv9}) {
       # standard flow for SAPRC
+      my $diag_full_path = &find_diag_path ($opt{asm_diag_name}, $opt{asm_diag_path}, $opt{asm_diag_root}) ;
+
+      # copy diagnostic to run area
+      `cp $diag_full_path $diag_name` ;
+      die ("DIE. unable to copy assembly diag to $ENV{PWD}") if ($?) ;
+      `chmod +w $diag_name` ;
+      die ("DIE. unable to permission of assembly diag") if ($?) ;
+
+      # gunzip if needed
+      if ($opt{asm_diag_name} =~ /\.s\.gz/) {
+        `gzip -d diag.s.gz` ;
+        die ("DIE. unable to gunzip assembly diag") if ($?) ;
+        $diag_name = "diag.s" ;
+      }
+
+      # pre process if needed
+      &pre_process ;
+
+      # extract sims options from diag.s
+      if (($diag_name =~ /\.s/) or ($diag_name =~ /\.S/)) {
+        open (DIAGIN, "< $diag_name") or die "DIE. Could not open $diag_name" ;
+
+        while (<DIAGIN>) {
+          my $line = $_ ;
+
+          if ($line =~ /^\!SIMS\+ARGS\:/) {
+            my (@plusargs) = split (/\s+/, $line) ;
+            shift (@plusargs) ;
+            push (@ARGV, @plusargs) ;
+            print "$prg: Found sims arguments in $diag_name: @plusargs\n" ;
+            parse_args ("dummy", 0) ;
+          }
+        }
+
+        close (DIAGIN) ;
+      }
+
       # assemble
       push (@{$opt{midas_args}}, "-DFAST_BOOT") if ($opt{fast_boot}) ;
       push (@{$opt{midas_args}}, "-diag_root=$dv_root") ;
@@ -2502,6 +2785,7 @@ sub parse_args
             'fast_boot!',
             'finish_mask=s',
             'flist=s@',
+            'flist_vhdl=s@',
             'group=s@',
             'group_name=s',
             'gzip!',
@@ -2553,6 +2837,7 @@ sub parse_args
             'rv64_march=s',
             'rv64_target_triple=s',
             'rv64_platform!',
+            'sim_pll!',
             'other_sim_build!',
             'sim_build_args=s@',
             'other_sim_build_cmd=s',
@@ -2588,6 +2873,7 @@ sub parse_args
             'vcs_use_initreg!',
             'verbose!',
             'vfile=s@',
+            'vhdlfile=s@',
             'vlt_build!',
             'vlt_build_args=s@',
             'vlt_run!',
@@ -2599,6 +2885,7 @@ sub parse_args
             'log_all!',
             'debug_all!',
             'ibm!',
+            'pyocn!',
             'ed_enable!',
             'ed_sync_method=s',
             'slurm!',
@@ -2667,7 +2954,28 @@ sub parse_args
     else { die ("DIE. Unprocessed argument: $x") ; }
   }
 
-  # in case a precompiled riscv binary is directly specified
+  # Set ISA to choose compilation flow based on ISA
+  if ($opt{decades_chip}) {
+    $opt{rv64} = 1 ;
+    print "$prg: Building/running for rv64\n" ;
+  }
+  if ($opt{ost1}) {
+    $opt{sparcv9} = 1 ;
+    print "$prg: Building/running for sparcv9\n" ;
+  }
+  if ($opt{pico}) {
+    $opt{rv32} = 1 ;
+    print "$prg: Building/running for rv32\n" ;
+  }
+  if ($opt{ariane}) {
+    $opt{rv64} = 1 ;
+    print "$prg: Building/running for rv64\n" ;
+  }
+  if ($opt{rv32}) {
+    print "$prg: Building/running for rv32\n" ;
+  }
+
+  # in case a precompiled riscv binary for ariane is directly specified
   if ($opt{precompiled} and ($opt{rv32} | $opt{rv64})) {
     if (!($opt{asm_diag_name} =~ /\.riscv/)) {
         $opt{asm_diag_name} = fileparse($opt{asm_diag_name}, qr/\.[^.]*/);
@@ -2681,7 +2989,7 @@ sub parse_args
     $opt{ncv_build} = 0 ;
     $opt{icv_build} = 0 ;
     $opt{msm_build} = 0 ;
-	$opt{riv_build} = 0 ;
+    $opt{riv_build} = 0 ;
     $opt{vlt_build} = 0 ;
     $opt{other_sim_build} = 0 ;
   }
@@ -2706,32 +3014,79 @@ sub parse_args
   print "$prg: using random seed $opt{tg_seed}\n" ;
 
   # PITON flag: disables PLL if sim_pll is not set
-  push (@{$opt{config_rtl}}, "USE_FAKE_PLL_AND_CLKMUX");
+  if (!$opt{sim_pll}) {
+    push (@{$opt{config_rtl}}, "USE_FAKE_PLL_AND_CLKMUX");
+  } else {
+    # enable bsg_clk_gen if sim_pll is set
+    push (@{$opt{config_rtl}}, "PITON_PLL_BSG_CLK_GEN");
+    push (@{$opt{sim_build_args}}, "+neg_tchk");
+    push (@{$opt{sim_build_args}}, "-negdelay");
+    push (@{$opt{sim_build_args}}, "+sdfverbose");
+    if (!($opt{vcs_build} or $opt{vcs_run})) {
+      print "$prg: Warning: -sim_pll is only proven to work with VCS.\n";
+    }
+    print "$prg: Info: You need to manually (-vfile=<...>) include the gate-level netlist of clk_gen_wrapper from the backend flow.\n";
+    print "$prg: Info: You need to manually (-sim_build_args='-sdf min:clk_gen_wrapper:<...>') include the SDF annotation of clk_gen_wrapper from the backend flow.\n";
+    print "$prg: Info: After build, you need to manually enable bsg_clk_gen during VCS run.\n";
+    print "$prg: Info: Otherwise, the bypass clock will be used by default.\n";
+    print "$prg: Info: sims ... -sim_run_args=+pll_en -sim_run_args=+bsg_clk_gen_tap=<...> -sim_run_args=+bsg_clk_gen_ds=<...>\n";
+    print "$prg: Info: The TAP and DS are used to determine the clock frequency. Data can be retrived using the script \$DV_ROOT/design/chip/bsg_clk_gen/script/gate_sim.sh\n";
+  }
   # Disable IOs
   push (@{$opt{config_rtl}}, "USE_FAKE_IOS");
 
   # set up network_config defines
   if ($opt{network_config}) {
-    if (($opt{network_config} eq "xbar_config") or ($opt{network_config} eq "2dmesh_config")) {
+    if (($opt{network_config} eq "xbar_config") or ($opt{network_config} eq "2dmesh_config") or ($opt{network_config} eq "pyocn_config") or ($opt{network_config} eq "pyocn_router_config") ) {
       $ENV{PITON_NETWORK_CONFIG}=$opt{network_config};
     } else {
-      die ("DIE. network_config can only be xbar_config or 2dmesh_config");
+      die ("DIE. network_config can only be xbar_config, 2dmesh_config, pyocn_config, or pyocn_router_config");
     }
   } else {
-    print "$prg: network_config not specified, assuming 2dmesh configuration\n";
-    $ENV{PITON_NETWORK_CONFIG}="2d_mesh";
+    print "$prg: network_config not specified, assuming pyocn_router configuration\n";
+    $ENV{PITON_NETWORK_CONFIG}="pyocn_router_config";
   }
 
   $ENV{PITON_OST1}     = $opt{ost1};
   $ENV{PITON_PICO}     = $opt{pico};
   $ENV{PITON_PICO_HET} = $opt{pico_het};
+  $ENV{DECADES_CHIP}   = $opt{decades_chip};
   $ENV{PITON_ARIANE}   = $opt{ariane};
   $ENV{PITON_RV64_PLATFORM}   = "1" if ($opt{rv64_platform});
+  $ENV{PITON_NIBBLER}  = $opt{nibbler};
+  $ENV{PITON_PRGA}     = $opt{prga};
+  $ENV{PITON_PRGA_MOCK_APP}     = $opt{prga_mock_app};
+  $ENV{DECADES_DECOUPLING}  = $opt{decoupling};
+  $ENV{PRGA_CTRL_X_TILE} = $opt{prga_ctrl_x_tile};
+  $ENV{PRGA_CTRL_Y_TILE} = $opt{prga_ctrl_y_tile};
+  $ENV{PITON_RVIC} = $opt{rvic};
+
+  push (@{$opt{config_rtl}}, "DECADES_CHIP")     if ($opt{decades_chip});
+  push (@{$opt{config_rtl}}, "NO_RTL_CSM")     if ($opt{decades_chip});
+  push (@{$opt{config_rtl}}, "L2_SEND_NC_REQ")     if ($opt{decades_chip});
+  push (@{$opt{config_rtl}}, "NIBBLER_VECTOR_SHIFT")     if ($opt{decades_chip});
+  push (@{$opt{config_rtl}}, "PITON_OST1")     if ($opt{ost1});
+  push (@{$opt{config_rtl}}, "PITON_PICO")     if ($opt{pico});
+  push (@{$opt{config_rtl}}, "PITON_PICO")     if ($opt{pico_het});
   push (@{$opt{config_rtl}}, "PITON_PICO_HET") if ($opt{pico_het});
+  push (@{$opt{config_rtl}}, "PITON_ARIANE")   if ($opt{ariane});
+  push (@{$opt{config_rtl}}, "WT_DCACHE")      if ($opt{ariane});
+  push (@{$opt{config_rtl}}, "PITON_NIBBLER")  if ($opt{nibbler});
+  push (@{$opt{config_rtl}}, "DECADES_DECOUPLING")  if ($opt{decoupling});
+  push (@{$opt{config_rtl}}, "PITON_PRGA")       if ($opt{prga});
+  push (@{$opt{config_rtl}}, "PITON_RVIC")       if ($opt{rvic});
+
+  if ($opt{prga} && ($opt{prga_mock_app} ne "")) {
+    my $config_rtl_prga_mock_app = sprintf "PITON_PRGA_MOCK_APP %s", $opt{prga_mock_app} ;
+    push (@{$opt{config_rtl}}, $config_rtl_prga_mock_app) ;
+  }
 
   my $pton_x_tiles="";
   my $pton_y_tiles="";
   my $pton_num_tiles="";
+  my $pton_rv64_num_tiles=0;
+  my $pton_rv64_x_tiles=0;
+  my $pton_rv64_y_tiles=0;
 
   # conveniently sets up the tile RTL defines for manycore model
   if ($opt{x_tiles} && $opt{y_tiles}) {
@@ -2742,23 +3097,58 @@ sub parse_args
     $pton_y_tiles=$opt{y_tiles};
     $pton_num_tiles=($opt{x_tiles} * $opt{y_tiles});
   } else {
-    print "$prg: x_tiles and y_tiles not defined, assuming x dimension is <= 8\n" ;
-    if (! $opt{num_tile}) {
-        print "$prg: num_tile not defined, assuming just one tile\n" ;
-        $opt{num_tile} = 1;
-    }
+    die( "DIE. You must define -x_tiles=N and -y_tiles=M") ;
+  }
 
-    $pton_x_tiles=(($opt{num_tile}-1)%8)+1;
-    $pton_y_tiles=(($opt{num_tile}-1)/8)+1;
-    $pton_num_tiles=$opt{num_tile};
+  #TODO rv64_x/y_tiles only support cifer_chip config now.  
+  $pton_rv64_x_tiles=$pton_x_tiles;
+  $pton_rv64_y_tiles=$pton_y_tiles;
+  if ($opt{decades_chip}) {
+    $pton_rv64_y_tiles = int(($pton_y_tiles + 1)/2);
+    $pton_rv64_num_tiles = $pton_rv64_x_tiles * $pton_rv64_y_tiles;
+  } elsif ($opt{decoupling}) {
+    # only one row, tile (4k+1, 0) is IS tile.
+    $pton_rv64_num_tiles = $pton_num_tiles - int(($pton_num_tiles+2)/4); 
+    $pton_rv64_x_tiles = $pton_rv64_num_tiles;
+  } elsif ($opt{prga}) {
+    $pton_rv64_num_tiles = $pton_num_tiles - 1;
+  } elsif ($opt{ariane}) {
+    $pton_rv64_num_tiles = $pton_num_tiles; 
   }
 
   for (my $i=0; $i < $pton_num_tiles; $i++) {
     push (@{$opt{config_rtl}}, "RTL_TILE" . $i);
-    if ($opt{pico} || ($opt{pico_het} && ($i % 2 == 1))) {
+    if ($opt{decades_chip}) {
+        my $y = $i / $pton_x_tiles;
+        my $x = $i - $y * $pton_x_tiles;
+        if ($y == $opt{prga_ctrl_y_tile} && $x == $opt{prga_ctrl_x_tile}) {
+            push (@{$opt{config_rtl}}, "RTL_PRGA" . $i);
+        }
+        elsif ($y % 2 == 0) {
+            push (@{$opt{config_rtl}}, "RTL_ARIANE" . $i);
+        }
+        elsif ($y % 4 == 1) {
+            push (@{$opt{config_rtl}}, "RTL_ACC" . $i);
+        } 
+        else {
+            push (@{$opt{config_rtl}}, "RTL_IS_TILE" . $i);
+        }
+    } elsif ($opt{prga} && $i == $pton_num_tiles - 1) {
+        # [FIXME] reserve the last tile for PRGA
+        push (@{$opt{config_rtl}}, "RTL_PRGA" . $i);
+    } elsif ($opt{decoupling}) {
+        if ($i % 4 == 1) {
+            #Add an IS Tile every 4 tiles
+            push (@{$opt{config_rtl}}, "RTL_IS_TILE" . $i);
+        } else {
+            push (@{$opt{config_rtl}}, "RTL_ARIANE" . $i);
+        }
+    } elsif ($opt{pico} || ($opt{pico_het} && ($i % 2 == 1))) {
         push (@{$opt{config_rtl}}, "RTL_PICO" . $i);
     } elsif ($opt{ariane}) {
         push (@{$opt{config_rtl}}, "RTL_ARIANE" . $i);
+    } elsif ($opt{nibbler}) {
+        push (@{$opt{config_rtl}}, "RTL_NIBBLER" . $i);
     } elsif ($opt{ost1}) {
         push (@{$opt{config_rtl}}, "RTL_SPARC" . $i);
     }
@@ -2767,6 +3157,10 @@ sub parse_args
   $ENV{PITON_X_TILES}=$pton_x_tiles;
   $ENV{PITON_Y_TILES}=$pton_y_tiles;
   $ENV{PITON_NUM_TILES}=$pton_num_tiles;
+  $ENV{PITON_RV64_TILES}=$pton_rv64_num_tiles;
+  $ENV{PITON_RV64_X_TILES}=$pton_rv64_x_tiles;
+  $ENV{PITON_RV64_Y_TILES}=$pton_rv64_y_tiles;
+
   if($opt{dynamic_csm}) {
     $ENV{PITON_DYNAMIC_CSM}=$opt{dynamic_csm};
     push (@{$opt{midas_args}}, "-DDYNAMIC_CSM=$opt{dynamic_csm}");
@@ -2776,7 +3170,9 @@ sub parse_args
 
   push (@{$opt{midas_args}}, "-DPITON_X_TILES=$pton_x_tiles");
   push (@{$opt{midas_args}}, "-DPITON_Y_TILES=$pton_y_tiles");
-  push (@{$opt{midas_args}}, "-DPITON_NUM_TILES=$pton_num_tiles");
+  # push (@{$opt{midas_args}}, "-DPITON_NUM_TILES=$pton_num_tiles");
+  # TODO might want to keep both num_tiles and rv64_tiles
+  push (@{$opt{midas_args}}, "-DPITON_NUM_TILES=$pton_rv64_num_tiles");
 
   # Alexey: set default value for UART_DIV_LATCH define
   if (index("@{$opt{midas_args}}", "UART_DIV_LATCH") == -1) {
@@ -3012,8 +3408,17 @@ VERILOG COMPILATION RELATED
            each flist will be concatenated into the final verilog flist
            used to build the model.
 
+    -flist_vhdl=FLIST
+           full path to flist to be appended together to generate the
+           final vhdl flist. multiple such arguments may be used and
+           each flist will be concatenated into the final vhdl flist
+           used to build the model.
+
     -vfile=FILE
            verilog file to be included into the flist
+
+    -vhdlfile=FILE
+           vhdl file to be included into the flist
 
     -config_rtl=DEFINE
            each such parameter is place as a `define in config.v to
@@ -3044,6 +3449,10 @@ VERILOG COMPILATION RELATED
     -ariane
            this specifies that the ARIANE RV64GC core shall be used
            in this case, programs are compiled and assembled using the RISCV GCC toolchain.
+    
+    -decoupling
+           this specifies that a decoupling unit (DCP) is instantiated together with an ARIANE core
+           in each tile. must use with the -ariane flag
 
 VERILOG RUNTIME RELATED
 

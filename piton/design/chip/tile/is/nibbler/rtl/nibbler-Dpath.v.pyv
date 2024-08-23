@@ -1,0 +1,551 @@
+// Copyright (c) 2024 Princeton University
+// All rights reserved.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+`ifndef NIBBLER_DPATH_V
+`define NIBBLER_DPATH_V
+<%
+from pyhplib import *
+%>
+module nibbler_Dpath
+(
+
+  input                  clk,
+  input                  reset,
+  output                 nibbler_csr_int,
+  input                  nibbler_int,
+  output reg             csr_disable_nibbler,
+
+  output [31:0]          imemreq_msg_addr,
+  output                 imemreq_nc,
+
+  output [31:0]          dmemreq_msg_addr,
+  output [31:0]          dmemreq_msg_data,
+  input  [1:0]           dmemreq_msg_len,
+  output                 dmemreq_nc,
+  input                  memreq_signed, // sign extend response based on this bit from ctrl fir both LB & ExLB
+  input  [31:0]          dmemresp_msg_data,
+  input                  dmemresp_val_Xhl,
+  output                 use_addr_ext,
+  output [7:0]           memreq_addr_ext,
+  output [31:0]          memreq_data_ext,
+
+  input                  vector_memop_Xhl,
+  input                  spmemreq_rw,
+  output [15:0]          spmemreq_msg_addr, // 16-bit nc local scratchpad address space
+<%
+print('  output [' + str((NIBBLER_P_NLANES * NIBBLER_P_NBITS) - 1) + ':0]         spmemreq_msg_data,')
+print('  output [' + str((NIBBLER_P_NLANES * NIBBLER_P_NBITS) - 1) + ':0]         spmemreq_msg_bw,')
+print('  input  [' + str((NIBBLER_P_NLANES * NIBBLER_P_NBITS) - 1) + ':0]         spmemresp_msg_data,')
+%>
+  input                  sp_handshake_prev,
+
+  input                  csr_read_en_Xhl,
+  input                  csr_write_en_Xhl,
+  output                 csr_ext_mem_mode,
+
+  input                  nibbler_conf,
+  input  [2:0]           nibbler_code,
+  input  [31:0]          conf_data,
+  output reg [31:0]      nibbler_dcp_csr_read_data,
+
+  // ctrl -> dpath
+  // --------------
+  input [31:0]           ir,
+  input                  pc_mux_sel_Xhl,
+  input                  pc_plus4_mux_sel_Xhl,
+  // Register Interface with Mem
+  input   [4:0]          rega_addr_Rhl,
+  input   [4:0]          regb_addr_Rhl,
+  
+  input   [4:0]          wb_addr_Xhl,
+  
+  input                  wb_en_Xhl,
+  input                  v_wb_en_Xhl,
+  input                  vm_reg_en_Xhl,
+  input                  masking_en_Xhl,
+  input                  sp_subword_incr_Xhl,
+  input                  wb_to_addr_Xhl,
+  input                  wb_to_data_Xhl,
+
+  // ALU Inputs
+  `ifdef NIBBLER_VECTOR_SHIFT 
+  input                 shamt_reg_en_Xhl,
+  input                 shamt_mux_sel_Xhl,
+
+  input                 adj_sw_mux_sel_Xhl,
+  input                 adj_sw_reg_en_Xhl,
+  input                 a_offset_mux_sel_Rhl,
+  input                 a_offset_mux_sel_Xhl,
+  input [4:0]           shamt_imm_Xhl,
+  input                 shift_inst_dir_Xhl,
+  input                 a_rd_tmp_Xhl,
+  `endif
+  input                  a_mux_sel_Xhl,
+<%
+from pyhplib import *
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0]    b_imm_Xhl,')
+%>
+  input                  b_mux_sel_Xhl,
+
+<%
+print('  input ['+str(NIBBLER_C_OFFBITS-1)+':0]  a_subword_off_Rhl,')
+print('  input ['+str(NIBBLER_C_OFFBITS-1)+':0]  b_subword_off_Rhl,')
+print('  input ['+str(NIBBLER_C_OFFBITS-1)+':0]  wb_subword_off_Xhl,')
+%>
+  input                  addsub_fn_Xhl,
+  input [1:0]            logic_fn_Xhl,
+  input [1:0]            alu_fn_type_Xhl,
+  
+  input                  prop_flag_Xhl,
+  input                  carry_in_1_Xhl,    
+  input                  flag_reg_en_Xhl,
+
+  input                  addr_shift_dir_sel_Xhl,
+  input                  addr_reg_en_Xhl,
+  
+  input                  last_uop_Xhl,
+  input                  br_reg_en_Xhl,
+  input [2:0]            br_type_Xhl,
+
+  output                 b_use_imm_reg_Xhl, // Branch register indicates if branch is taken (1) or not taken (0).
+  output [31:0]          proc2cop_data_Xhl,
+
+  input                  vl_reg_en_Xhl,
+
+  output [31:0]          pc
+
+);
+  
+<%
+print('  localparam NIBBLER_P_NBITS = '+str(NIBBLER_P_NBITS) + ';')
+print('  localparam NIBBLER_P_NLANES = '+str(NIBBLER_P_NLANES) + ';')
+print('  localparam NIBBLER_C_OFFBITS = '+str(NIBBLER_C_OFFBITS) + ';')
+print('  localparam NIBBLER_C_LOG_NBITS = '+str(NIBBLER_C_LOG_NBITS) + ';')
+%>
+
+  //----------------
+  // proc2cop logic
+  // ---------------
+  wire [NIBBLER_P_NBITS-1:0] alu_mux_out_Xhl;
+  wire [31:0]        addr_reg_Xhl;
+  assign proc2cop_data_Xhl = {alu_mux_out_Xhl, addr_reg_Xhl[31-NIBBLER_P_NBITS:0]};
+
+  //---------------
+  // All PC Logic
+  //---------------
+
+  wire [NIBBLER_P_NBITS-1:0] pc_plus4_mux_out_Xhl;
+  wire signed_off_msb_Xhl;
+<%
+if NIBBLER_P_NBITS == 1:
+  print("  wire bitwise_shamt_Xhl; // dummy for bit-serial")
+else:
+  print("  wire [NIBBLER_C_LOG_NBITS-1:0] bitwise_shamt_Xhl;")
+%>
+
+
+  localparam CSR_START_PC_IDX           = 3'b011;
+  reg        csr_nibbler_start;   // Wakes nibbler up when set high. Also forces new PC  in csr_start_pc to be fetched.
+  reg [31:0] csr_start_pc;        // First PC nibbler fetches.
+
+  wire overwrite_pc = nibbler_csr_int || nibbler_int;
+  
+  nibbler_PCComputation pc_logic
+  (
+    .clk                        (clk),
+    .reset                      (reset),
+    .overwrite_pc               (overwrite_pc),
+    .overwrite_pc_addr          (csr_start_pc),
+    .last_uop_Xhl               (last_uop_Xhl),
+    .pc_mux_sel_Xhl             (pc_mux_sel_Xhl),
+    .b_use_imm_reg_Xhl          (b_use_imm_reg_Xhl),
+    .alu_mux_out_Xhl            (alu_mux_out_Xhl),
+    .pc_plus4_mux_sel_Xhl       (pc_plus4_mux_sel_Xhl),
+    .a_mux_sel_Xhl              (a_mux_sel_Xhl),
+    .addr_shift_dir_sel_Xhl     (addr_shift_dir_sel_Xhl),
+    .addr_reg_en_Xhl            (addr_reg_en_Xhl),
+    .pc_plus4_mux_out_Xhl       (pc_plus4_mux_out_Xhl),
+    .addr_reg_Xhl               (addr_reg_Xhl),
+    .pc                         (pc)
+  );
+  assign imemreq_msg_addr = pc;
+
+
+  //-------------
+  // Scalar Core
+  //-------------
+   wire scalar_ld_resp_val = (sp_handshake_prev && !vector_memop_Xhl && spmemreq_rw);
+  wire [NIBBLER_P_NBITS-1:0] scalar_ld_resp_data;
+  reg  [31:0] csr_read_data_Xhl;
+  wire [31:0] vl_reg_Xhl;
+  wire [31:0] avl_reg_Xhl;
+  wire [NIBBLER_P_NBITS-1:0] scalar_rf_out_a_Xhl;
+  wire [NIBBLER_P_NBITS-1:0] scalar_rf_out_b_Xhl;
+  wire [NIBBLER_C_OFFBITS-1:0] a_subword_idx_Rhl;
+
+nibbler_ScalarDpath scalar_core
+(
+  .clk                   (clk),
+  .reset                 (reset),
+  .rega_addr_Rhl         (rega_addr_Rhl),
+  .regb_addr_Rhl         (regb_addr_Rhl),
+  .wb_en_Xhl             (wb_en_Xhl),
+  .wb_addr_Xhl           (wb_addr_Xhl),
+
+  .sp_subword_incr_Xhl   (sp_subword_incr_Xhl),
+  .scalar_ld_resp_val    (scalar_ld_resp_val),
+  .scalar_ld_resp_data   (scalar_ld_resp_data),
+  .wb_to_addr_Xhl        (wb_to_addr_Xhl),
+  .wb_to_data_Xhl        (wb_to_data_Xhl),
+  .csr_read_en_Xhl       (csr_read_en_Xhl),
+  .csr_read_data_Xhl     (csr_read_data_Xhl),
+
+  .ir                    (ir),
+
+  `ifdef NIBBLER_VECTOR_SHIFT 
+  .shamt_reg_en_Xhl      (shamt_reg_en_Xhl), 
+  .shamt_mux_sel_Xhl     (shamt_mux_sel_Xhl),
+  .adj_sw_mux_sel_Xhl    (adj_sw_mux_sel_Xhl), 
+  .adj_sw_reg_en_Xhl     (adj_sw_reg_en_Xhl), 
+  .a_offset_mux_sel_Rhl  (a_offset_mux_sel_Rhl),
+  .a_offset_mux_sel_Xhl  (a_offset_mux_sel_Xhl),
+  .shamt_imm_Xhl         (shamt_imm_Xhl),
+  .shift_inst_dir_Xhl    (shift_inst_dir_Xhl),
+  .a_rd_tmp_Xhl          (a_rd_tmp_Xhl),
+
+  .signed_off_msb_Xhl    (signed_off_msb_Xhl),
+  .bitwise_shamt_Xhl     (bitwise_shamt_Xhl),
+  `endif
+
+  .a_mux_sel_Xhl         (a_mux_sel_Xhl),
+  .pc_plus4_mux_out_Xhl  (pc_plus4_mux_out_Xhl),
+  .b_imm_Xhl             (b_imm_Xhl),
+  .b_mux_sel_Xhl         (b_mux_sel_Xhl),
+
+  .a_subword_off_Rhl     (a_subword_off_Rhl),
+  .a_subword_idx_Rhl     (a_subword_idx_Rhl),
+  .b_subword_off_Rhl     (b_subword_off_Rhl),
+  .wb_subword_off_Xhl    (wb_subword_off_Xhl),
+
+  .addsub_fn_Xhl         (addsub_fn_Xhl),
+  .logic_fn_Xhl          (logic_fn_Xhl),
+  .alu_fn_type_Xhl       (alu_fn_type_Xhl),
+
+  .prop_flag_Xhl         (prop_flag_Xhl),
+  .carry_in_1_Xhl        (carry_in_1_Xhl),
+  .last_uop_Xhl          (last_uop_Xhl),
+  .flag_reg_en_Xhl       (flag_reg_en_Xhl),
+  .br_reg_en_Xhl         (br_reg_en_Xhl),
+  .br_type_Xhl           (br_type_Xhl),
+
+  .rf_out_a_Xhl          (scalar_rf_out_a_Xhl),
+  .rf_out_b_Xhl          (scalar_rf_out_b_Xhl),
+
+  .dmemreq_msg_addr_Xhl  (dmemreq_msg_addr),
+  .dmemreq_msg_data_Xhl  (dmemreq_msg_data),
+  .dmemreq_msg_len_Xhl   (dmemreq_msg_len),
+  .dmemreq_signed_Xhl    (memreq_signed),
+  .dmemresp_val_Xhl      (dmemresp_val_Xhl),
+  .dmemresp_msg_data_Xhl (dmemresp_msg_data),
+
+  .b_use_imm_reg_Xhl     (b_use_imm_reg_Xhl),
+  .alu_mux_out_Xhl       (alu_mux_out_Xhl),
+
+  .vl_reg_en_Xhl         (vl_reg_en_Xhl),
+  .avl_reg_Xhl           (avl_reg_Xhl),
+  .vl_reg_Xhl            (vl_reg_Xhl)
+
+);
+
+//------
+// CSRs
+//------
+// Accessible by CSRRW instructions
+reg [31:0] csr_exmem_data_ext;  // Optional 32-bit data extension for wide external memops
+reg [31:0] csr_mem_access_mode; // [31:13]=0, [12]=Extended address, [11:4]=8-bit address extension for exld/exst, [3:0]= {external/scratchpad, 64/32-bit, cacheable/NC imemreq, C/NC dmemreq]
+
+assign dmemreq_nc = csr_mem_access_mode[0];
+assign imemreq_nc = csr_mem_access_mode[1];
+assign csr_ext_mem_mode = csr_mem_access_mode[3];
+assign use_addr_ext = csr_mem_access_mode[12];
+assign memreq_addr_ext = csr_mem_access_mode[11:4];
+assign memreq_data_ext = csr_exmem_data_ext;
+
+// Affect Nibbler Functionality
+
+assign     nibbler_csr_int = csr_nibbler_start;
+
+reg        csr_disable_nibbler;
+// Read-only for Monitoring
+reg [31:0] csr_pc;
+reg [31:0] csr_avl;
+reg [31:0] csr_vl;
+
+localparam CSR_EXMEM_DATA_EXT_IDX     = 3'b000;
+localparam CSR_MEM_ACCESS_MODE_IDX    = 3'b001;
+localparam CSR_NIBBLER_START_IDX      = 3'b010;
+// localparam CSR_START_PC_IDX        = 3'b011; // Previously  Declared
+localparam CSR_DISABLE_NIBBLER_IDX    = 3'b100;
+localparam CSR_PC_IDX                 = 3'b101;
+localparam CSR_AVL_IDX                = 3'b110;
+localparam CSR_VL_IDX                 = 3'b111;
+
+always @ (posedge clk) begin
+  if (reset) begin
+    csr_exmem_data_ext <= 32'h8100000c;
+    csr_mem_access_mode<= 32'b0; // Default to regular memory access so you're not stuck in only-interrupt mode.
+    csr_nibbler_start  <= 1'b0;
+    csr_start_pc       <= 32'h400000000;
+    csr_disable_nibbler<= 1'b0;
+    csr_pc             <= 32'b0;
+    csr_avl            <= 32'b0;
+    csr_vl             <= 32'b0;
+  end else begin
+    // Handle csr updates coming from off-tile
+    if (nibbler_conf) begin
+      case(nibbler_code)
+        CSR_EXMEM_DATA_EXT_IDX   : csr_exmem_data_ext  <= conf_data[31:0];
+        CSR_MEM_ACCESS_MODE_IDX  : csr_mem_access_mode <= conf_data[31:0];
+        CSR_NIBBLER_START_IDX    : csr_nibbler_start   <= conf_data[0];
+        CSR_START_PC_IDX         : csr_start_pc        <= conf_data[31:0];
+        CSR_DISABLE_NIBBLER_IDX  : csr_disable_nibbler <= conf_data[0];
+        CSR_PC_IDX               : csr_pc              <= conf_data[31:0];
+        CSR_AVL_IDX              : csr_avl             <= conf_data[31:0];
+        CSR_VL_IDX               : csr_vl              <= conf_data[31:0];
+      endcase
+    // Handle csr updates coming from Nibbler CSRRW instructions
+    // All data comes from the mem_data_reg in the scalar datapath
+    // All addresses come from bits [2:0] of mem_addr_reg in scalar dpath
+    end else if (csr_write_en_Xhl) begin
+      case(dmemreq_msg_addr[2:0])
+        CSR_EXMEM_DATA_EXT_IDX   : csr_exmem_data_ext  <= dmemreq_msg_data[31:0];
+        CSR_MEM_ACCESS_MODE_IDX  : csr_mem_access_mode <= dmemreq_msg_data[31:0];
+        CSR_NIBBLER_START_IDX    : csr_nibbler_start   <= dmemreq_msg_data[0];
+        CSR_START_PC_IDX         : csr_start_pc        <= dmemreq_msg_data[31:0];
+        CSR_DISABLE_NIBBLER_IDX  : csr_disable_nibbler <= dmemreq_msg_data[0];
+        CSR_PC_IDX               : csr_pc              <= dmemreq_msg_data[31:0];
+        CSR_AVL_IDX              : csr_avl             <= dmemreq_msg_data[31:0];
+        CSR_VL_IDX               : csr_vl              <= dmemreq_msg_data[31:0]; 
+      endcase
+    end else begin
+      csr_exmem_data_ext  <=csr_exmem_data_ext;
+      csr_mem_access_mode <=csr_mem_access_mode;
+      csr_nibbler_start   <= 1'b0; // Turn off start flag after one cycle.
+      csr_start_pc        <=csr_start_pc;
+      csr_disable_nibbler <=csr_disable_nibbler;
+      // Keep the following updated with value in datapath
+      csr_pc              <=pc; 
+      csr_avl             <=avl_reg_Xhl;
+      csr_vl              <=vl_reg_Xhl; 
+    end
+  end
+end
+
+// Output Config Reg of Interest to DCP
+always @(*) begin
+  case(nibbler_code)
+    CSR_EXMEM_DATA_EXT_IDX   : nibbler_dcp_csr_read_data = {32'b0, csr_exmem_data_ext};
+    CSR_MEM_ACCESS_MODE_IDX  : nibbler_dcp_csr_read_data = {32'b0, csr_mem_access_mode};
+    CSR_NIBBLER_START_IDX    : nibbler_dcp_csr_read_data = {63'b0, csr_nibbler_start};
+    CSR_START_PC_IDX         : nibbler_dcp_csr_read_data = {32'b0, csr_start_pc};
+    CSR_DISABLE_NIBBLER_IDX  : nibbler_dcp_csr_read_data = {63'b0, csr_disable_nibbler};
+    CSR_PC_IDX               : nibbler_dcp_csr_read_data = {32'b0, csr_pc};
+    CSR_AVL_IDX              : nibbler_dcp_csr_read_data = {32'b0, csr_avl};
+    CSR_VL_IDX               : nibbler_dcp_csr_read_data = {32'b0, csr_vl};
+    default                  : nibbler_dcp_csr_read_data = {64'b0};
+  endcase
+end
+
+  // Output Config Reg of Interest to Nibbler Scalar Core
+always @(*) begin
+  case(dmemreq_msg_addr[2:0])
+    CSR_EXMEM_DATA_EXT_IDX   : csr_read_data_Xhl = csr_exmem_data_ext;
+    CSR_MEM_ACCESS_MODE_IDX  : csr_read_data_Xhl = csr_mem_access_mode;
+    CSR_NIBBLER_START_IDX    : csr_read_data_Xhl = {31'b0, csr_nibbler_start};
+    CSR_START_PC_IDX         : csr_read_data_Xhl = csr_start_pc;
+    CSR_DISABLE_NIBBLER_IDX  : csr_read_data_Xhl = {31'b0, csr_disable_nibbler};
+    CSR_PC_IDX               : csr_read_data_Xhl = csr_pc;
+    CSR_AVL_IDX              : csr_read_data_Xhl = csr_avl;
+    CSR_VL_IDX               : csr_read_data_Xhl = csr_vl;
+    default                  : csr_read_data_Xhl = {32'b0};
+  endcase
+end
+
+
+//--------------
+// Lane Masking
+//--------------
+<%
+for i in range(NIBBLER_P_NLANES):
+  print('wire [NIBBLER_P_NBITS-1:0] alu_' + str(i) +'_out_Xhl;')
+%>
+
+// Mask register is 1-bit per lane
+reg [NIBBLER_P_NLANES-1:0] vm_reg_Rhl;
+reg [NIBBLER_P_NLANES-1:0] vl_mask_reg_Rhl;
+always @(posedge clk) begin
+  if (reset) begin
+    vm_reg_Rhl <= {NIBBLER_P_NLANES{1'b1}};
+    vl_mask_reg_Rhl <= {NIBBLER_P_NLANES{1'b1}};
+  end else if (vm_reg_en_Xhl) begin
+  // Vector Mask-Register Logical Instructions when vd == v0
+<%
+for i in range(NIBBLER_P_NLANES):
+  print('vm_reg_Rhl[' + str(i) + '] <= alu_' + str(i) +'_out_Xhl[0];')
+  print('vl_mask_reg_Rhl[' + str(i) + '] <= (vl_reg_Xhl > 32\'d' + str(i) +');')
+%>    
+  end
+
+end
+
+// Apply masking (ie. prevent register writeback and memory store) when appropriate
+// If the scratchpad responds from a vector load, write the data to rd when spmemresp_val is high
+wire v_wb_or_v_spmemresp_Xhl = v_wb_en_Xhl || (sp_handshake_prev && vector_memop_Xhl && spmemreq_rw); //rw = 1 for load
+wire [NIBBLER_P_NLANES-1:0] vl_masked_v_wb_en_Xhl =  vl_mask_reg_Rhl & {NIBBLER_P_NLANES{v_wb_or_v_spmemresp_Xhl}};
+wire [NIBBLER_P_NLANES-1:0] masked_v_wb_en_Xhl = masking_en_Xhl ? vm_reg_Rhl & {NIBBLER_P_NLANES{vl_masked_v_wb_en_Xhl}} : {NIBBLER_P_NLANES{vl_masked_v_wb_en_Xhl}};
+
+//-----------
+// Vector RF
+//-----------
+  
+
+wire ce_a_Rhl = rega_addr_Rhl != 5'b0; // Active high // TODO: Change these temporary values to distinguisn scalar vs vector RF
+wire ce_b_Rhl = regb_addr_Rhl != 5'b0; // Active high // TODO: Change these temporary values to distinguisn scalar vs vector RF
+wire ce_wb_Xhl = |masked_v_wb_en_Xhl;      // Active high
+wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] vrf_din_Xhl;
+wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] vrf_out_a_Xhl;
+wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] vrf_out_b_Xhl;
+
+// Convert from per-lane signals to per-bit signals
+wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] vrf_bw_Xhl;
+<%
+for i in range(NIBBLER_P_NLANES):
+  print('  // Lane '+ str(i) + 'write enable and data')
+  print('  assign vrf_bw_Xhl[' + str(i*NIBBLER_P_NBITS) + '+:NIBBLER_P_NBITS] = {NIBBLER_P_NBITS{masked_v_wb_en_Xhl['+str(i)+']}};')
+  print('  assign vrf_din_Xhl[' + str(i*NIBBLER_P_NBITS) + '+:NIBBLER_P_NBITS] = (vector_memop_Xhl && spmemreq_rw) ? spmemresp_msg_data[' + str(i*NIBBLER_P_NBITS) + '+:NIBBLER_P_NBITS] : alu_' + str(i) + '_out_Xhl;')
+%>
+nibbler_vector_rf vrf 
+(
+  .MEMCLK  (clk),
+  .RESET_N (~reset),
+  .CEA     (ce_a_Rhl),
+  .CEB     (ce_b_Rhl),
+  .CEW     (ce_wb_Xhl),
+  .AA      ({rega_addr_Rhl, a_subword_idx_Rhl}),
+  .AB      ({regb_addr_Rhl, b_subword_off_Rhl}),
+  .AW      ({wb_addr_Xhl, wb_subword_off_Xhl}),
+  .DIN     (vrf_din_Xhl),
+  .BW      (vrf_bw_Xhl),
+  .DOUTA   (vrf_out_a_Xhl),
+  .DOUTB   (vrf_out_b_Xhl)
+);
+
+
+wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] vrf_out_a_0s_Xhl;
+wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] vrf_out_b_0s_Xhl;
+reg [4:0] rega_addr_Xhl;
+reg [4:0] regb_addr_Xhl;
+always @(posedge clk) begin
+  if (reset) begin 
+    rega_addr_Xhl <= 5'b0;
+    regb_addr_Xhl <= 5'b0;
+  end else begin
+    rega_addr_Xhl <= rega_addr_Rhl;
+    regb_addr_Xhl <= regb_addr_Rhl;
+  end
+end
+
+assign vrf_out_a_0s_Xhl = (rega_addr_Xhl == 5'b0) ? {(NIBBLER_P_NLANES*NIBBLER_P_NBITS){1'b0}} : vrf_out_a_Xhl;
+assign vrf_out_b_0s_Xhl = (regb_addr_Xhl == 5'b0) ? {(NIBBLER_P_NLANES*NIBBLER_P_NBITS){1'b0}} : vrf_out_b_Xhl;
+
+// If it's a VX instruction, replace input B (vs1) with the value in rs1
+wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] vs1_rs1_mux_out_Xhl = ((ir[6:0]==7'b1010111) && (ir[14:12]==3'b100)) ? {NIBBLER_P_NLANES{scalar_rf_out_b_Xhl}} : vrf_out_b_0s_Xhl;
+// In this case, use this value as input B...
+// 
+
+//--------------
+// Vector Lanes
+//--------------
+
+<%
+for i in range(NIBBLER_P_NLANES):
+  print('''  
+  nibbler_SIMDLaneDpath lane_''' + str(i) + '''
+  (
+    .clk                   (clk),
+    .reset                 (reset),
+    .vrf_out_a_Xhl         (   vrf_out_a_0s_Xhl[''' + str((i+1)*NIBBLER_P_NBITS - 1) + ':' + str(i*NIBBLER_P_NBITS) + ''']),
+    .vrf_out_b_Xhl         (vs1_rs1_mux_out_Xhl[''' + str((i+1)*NIBBLER_P_NBITS - 1) + ':' + str(i*NIBBLER_P_NBITS) + ''']),
+
+    `ifdef NIBBLER_VECTOR_SHIFT 
+    .shift_inst_dir_Xhl    (shift_inst_dir_Xhl),
+    .signed_off_msb_Xhl    (signed_off_msb_Xhl),
+    .a_offset_mux_sel_Xhl  (a_offset_mux_sel_Xhl),
+    .bitwise_shamt_Xhl     (bitwise_shamt_Xhl),
+    .adj_sw_mux_sel_Xhl    (adj_sw_mux_sel_Xhl), 
+    .adj_sw_reg_en_Xhl     (adj_sw_reg_en_Xhl),     
+    `endif
+
+    .b_imm_Xhl             (b_imm_Xhl),
+    .b_mux_sel_Xhl         (b_mux_sel_Xhl),
+
+    .addsub_fn_Xhl         (addsub_fn_Xhl),
+    .logic_fn_Xhl          (logic_fn_Xhl),
+    .alu_fn_type_Xhl       (alu_fn_type_Xhl),
+
+    .prop_flag_Xhl         (prop_flag_Xhl),
+    .carry_in_1_Xhl        (carry_in_1_Xhl),
+    .flag_reg_en_Xhl       (flag_reg_en_Xhl),
+
+    .alu_mux_out_Xhl       (alu_'''+str(i)+'''_out_Xhl)
+    );''')
+%>
+
+//----------------------
+// Scratchpad Interface
+//----------------------
+
+  assign spmemreq_msg_addr = dmemreq_msg_addr[15:0]; // 64 kB Scratchpad. Wrap addresses.
+
+  wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] spmemreq_msg_data_scalar = {NIBBLER_P_NLANES{alu_mux_out_Xhl}};
+  wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] spmemreq_msg_data_vector = vrf_din_Xhl;
+  assign spmemreq_msg_data = vector_memop_Xhl ? spmemreq_msg_data_vector : spmemreq_msg_data_scalar;
+
+  wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] spmemreq_msg_bw_scalar;
+  wire [(NIBBLER_P_NLANES*NIBBLER_P_NBITS)-1:0] spmemreq_msg_bw_vector;
+  // Form mask based on  address. Microcode performs 4 8-bit accesses.
+  wire [8:0] sp_line_offset = {spmemreq_msg_addr[5:0],3'b000}; // TODO: Genericize
+  assign spmemreq_msg_bw_scalar = {{(NIBBLER_P_NLANES-1)*NIBBLER_P_NBITS{1'b0}}, {NIBBLER_P_NBITS{1'b1}}} << sp_line_offset; 
+  // Mask address for vector is all masked lanes active.
+  wire [NIBBLER_P_NLANES-1:0] masked_sp_wb_vector = vl_mask_reg_Rhl; //masking_en_Xhl ? vm_reg_Rhl : {NIBBLER_P_NLANES{1'b1}};
+<%
+for i in range(NIBBLER_P_NLANES):
+  print('  assign spmemreq_msg_bw_vector ['+str((i+1)*NIBBLER_P_NBITS - 1) + ':' + str(i*NIBBLER_P_NBITS) + '] = {NIBBLER_P_NBITS{masked_sp_wb_vector['+str(i)+']}};')
+%>
+  assign spmemreq_msg_bw = vector_memop_Xhl ? spmemreq_msg_bw_vector : spmemreq_msg_bw_scalar;
+
+  assign scalar_ld_resp_data = spmemresp_msg_data[sp_line_offset+:NIBBLER_P_NBITS];
+
+endmodule
+`endif

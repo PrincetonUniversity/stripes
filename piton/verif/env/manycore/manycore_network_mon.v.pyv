@@ -35,6 +35,10 @@
     print("`define PITON_NUM_TILES " + repr(PITON_NUM_TILES))
     if (PITON_NETWORK_CONFIG == "xbar_config"):
         print("`define XBAR_CONFIG")
+    elif PITON_NETWORK_CONFIG == "pyocn_config":
+        print("`define PYOCN_CONFIG")
+    elif PITON_NETWORK_CONFIG == "pyocn_router_config":
+        print("`define PYOCN_ROUTER_CONFIG")
 %>
 
 `ifndef USE_TEST_TOP // useless for older TOPs
@@ -46,6 +50,8 @@ module manycore_network_mon (
 `ifndef DISABLE_NETWORK_MONITOR
 `ifndef MINIMAL_MONITORING
 `ifndef XBAR_CONFIG
+`ifndef PYOCN_CONFIG
+`ifndef PYOCN_ROUTER_CONFIG
 // check boundary communication
 // There are two parts to the check
 /* 1. check for valid signal from valid tiles to non-valid tiles
@@ -112,16 +118,16 @@ begin
                 check_down = True;
                 print("`ifdef RTL_TILE%d" % flatid)
                 for nocid in [1,2,3]:
-                    if (y == 0):
-                        print("boundary_err = boundary_err | `CHIP.tile_%d_%d_out_N_noc%d_valid;" % (y,x,nocid))
+                    if (x == 0):
+                        print("boundary_err = boundary_err | `CHIP.tile_%d_%d_out_W_noc%d_valid;" % (y,x,nocid))
                         print('if (boundary_err == 1)')
                         print('begin')
-                        print('error_dir = "N";')
+                        print('error_dir = "W";')
                         print('error_noc = %d;' % nocid)
                         print('error_x = %d;' % x)
                         print('error_y = %d;' % y)
                         print('end')
-                        check_up = False;
+                        check_left = False;
                     if (y == PITON_Y_TILES-1):
                         print("boundary_err = boundary_err | `CHIP.tile_%d_%d_out_S_noc%d_valid;" % (y,x,nocid))
                         print('if (boundary_err == 1)')
@@ -142,18 +148,18 @@ begin
                         print('error_y = %d;' % y)
                         print('end')
                         check_right = False
-                    if (x == 0):
-                        if (y != 0):
+                    if (y == 0):
+                        if (x != 0):
                             # it's okay for tile 0_0 to send messages to off-chip
-                            print("boundary_err = boundary_err | `CHIP.tile_%d_%d_out_W_noc%d_valid;" % (y,x,nocid))
+                            print("boundary_err = boundary_err | `CHIP.tile_%d_%d_out_N_noc%d_valid;" % (y,x,nocid))
                             print('if (boundary_err == 1)')
                             print('begin')
-                            print('error_dir = "W";')
+                            print('error_dir = "N";')
                             print('error_noc = %d;' % nocid)
                             print('error_x = %d;' % x)
                             print('error_y = %d;' % y)
                             print('end')
-                        check_left = False;
+                        check_up = False;
 
                     if (check_up):
                         print("`ifndef RTL_TILE%d" % flatid_up)
@@ -300,9 +306,11 @@ begin
     //     `MONITOR_PATH.fail("network_mon: network_mon: packet going out of bound");
     // end
 end
-`endif
-`endif
-`endif
+`endif // PYOCN_ROUTER_CONFIG
+`endif // PYOCN_CONFIG
+`endif // XBAR_CONFIG
+`endif // MINIMAL_MONITORING
+`endif // DISABLE_NETWORK_MONITOR
 `endif // DISABLE_ALL_MONITORS
 endmodule
 

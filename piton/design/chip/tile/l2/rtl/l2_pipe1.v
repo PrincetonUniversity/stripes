@@ -117,6 +117,14 @@ module l2_pipe1(
 
     input wire [`L2_P1_DATA_BUF_IN_WIDTH-1:0] reg_data_out,
 
+
+    output  [`NOC_X_WIDTH-1:0] src_x_S2_f,
+    output  [`NOC_Y_WIDTH-1:0] src_y_S2_f,
+    input   [`L2_OWNER_BITS-1:0] flat_id_S2,
+    input   [`NOC_X_WIDTH-1:0] fwd_dst_x_S4,
+    input   [`NOC_Y_WIDTH-1:0] fwd_dst_y_S4,
+    output  [`L2_OWNER_BITS-1:0] fwd_dst_flat_id_S4,
+
     output wire mshr_cam_en,
     output wire mshr_wr_state_en,
     output wire mshr_wr_data_en,
@@ -895,6 +903,14 @@ l2_pipe1_dpath dpath(
     .broadcast_x_out_S4         (broadcast_x_out),
     .broadcast_y_out_S4         (broadcast_y_out),
     `endif
+
+    .src_x_S2_f                 (src_x_S2_f),
+    .src_y_S2_f                 (src_y_S2_f),
+    .flat_id_S2                 (flat_id_S2),
+    .fwd_dst_x_S4               (fwd_dst_x_S4),
+    .fwd_dst_y_S4               (fwd_dst_y_S4),
+    .fwd_dst_flat_id_S4         (fwd_dst_flat_id_S4),
+
     .addr_S1                    (addr_S1),
     .mshr_addr_in_S1            (mshr_addr_in),
     .tag_addr_S1                (tag_addr),

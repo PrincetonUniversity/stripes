@@ -1,10 +1,14 @@
 UART_FREQ ?= 30000000
 MAX_HARTS ?= 1
+PITON_RV64_X_TILES ?= 1
+PITON_RV64_Y_TILES ?= 1
+DECADES_DECOUPLING ?= 0
+DECADES_CHIP ?= 0
 CROSSCOMPILE ?= riscv64-unknown-elf-
 CC = ${CROSSCOMPILE}gcc
 PYTHON=python3
 
-CFLAGS = -DMAX_HARTS=$(MAX_HARTS) -DUART_FREQ=$(UART_FREQ) -Os -ggdb -march=rv64imac -mabi=lp64 -Wall -mcmodel=medany -mexplicit-relocs
+CFLAGS = -DMAX_HARTS=$(MAX_HARTS) -DPITON_RV64_X_TILES=$(PITON_RV64_X_TILES) -DPITON_RV64_Y_TILES=$(PITON_RV64_Y_TILES) -DDECADES_DECOUPLING=$(DECADES_DECOUPLING) -DDECADES_CHIP=$(DECADES_CHIP) -DUART_FREQ=$(UART_FREQ) -Os -ggdb -march=rv64imac -mabi=lp64 -Wall -mcmodel=medany -mexplicit-relocs
 CCASFLAGS = -mcmodel=medany -mexplicit-relocs
 LDFLAGS = -nostdlib -nodefaultlibs -nostartfiles
 
@@ -34,11 +38,15 @@ $(MAIN): rv64_platform.dtb $(OBJS_C) $(OBJS_S) linker.lds
 
 %.o: %.c
 	@echo "MAX_HARTS = $(MAX_HARTS)"
+	@echo "PITON_RV64_X_TILES = $(PITON_RV64_X_TILES)"
+	@echo "PITON_RV64_Y_TILES = $(PITON_RV64_Y_TILES)"
 	@$(CC) $(CFLAGS) $(INCLUDES) -c $<  -o $@ 
 	@echo "CC    <= $<"
 
 %.o: %.S
 	@echo "MAX_HARTS = $(MAX_HARTS)"
+	@echo "PITON_RV64_X_TILES = $(PITON_RV64_X_TILES)"
+	@echo "PITON_RV64_Y_TILES = $(PITON_RV64_Y_TILES)"
 	@$(CC) $(CFLAGS) $(CCASFLAGS) $(INCLUDES) -c $<  -o $@ 
 	@echo "CC    <= $<"
 

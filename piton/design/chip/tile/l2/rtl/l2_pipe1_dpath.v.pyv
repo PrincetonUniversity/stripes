@@ -231,6 +231,15 @@ module l2_pipe1_dpath(
     input wire [`L2_P1_DATA_BUF_IN_WIDTH-1:0] reg_data_out_S4,
 
 
+    // move the flatid xy converter out of socket
+    output reg [`NOC_X_WIDTH-1:0] src_x_S2_f,
+    output reg [`NOC_Y_WIDTH-1:0] src_y_S2_f,
+    input      [`L2_OWNER_BITS-1:0] flat_id_S2,
+    input      [`NOC_X_WIDTH-1:0] fwd_dst_x_S4,
+    input      [`NOC_Y_WIDTH-1:0] fwd_dst_y_S4,
+    output     [`L2_OWNER_BITS-1:0] fwd_dst_flat_id_S4,
+
+
     //Outputs from Stage 1
 
     output reg [`PHY_ADDR_WIDTH-1:0] addr_S1,
@@ -309,6 +318,7 @@ module l2_pipe1_dpath(
     output reg [`L2_STATE_INDEX_WIDTH-1:0] state_wr_addr_S4,
     output reg [`L2_STATE_ARRAY_WIDTH-1:0] state_data_in_S4,
     output reg [`L2_STATE_ARRAY_WIDTH-1:0] state_data_mask_in_S4
+
 
 );
 
@@ -466,8 +476,6 @@ end
 reg [`PHY_ADDR_WIDTH-1:0] addr_S2_f;
 reg [`MSG_MSHRID_WIDTH-1:0] mshrid_S2_f;
 reg [`MSG_SRC_CHIPID_WIDTH-1:0] src_chipid_S2_f;
-reg [`MSG_SRC_X_WIDTH-1:0] src_x_S2_f;
-reg [`MSG_SRC_Y_WIDTH-1:0] src_y_S2_f;
 reg [`MSG_SRC_FBITS_WIDTH-1:0] src_fbits_S2_f;
 reg [`MSG_SDID_WIDTH-1:0] sdid_S2_f;
 reg [`MSG_LSID_WIDTH-1:0] lsid_S2_f;
@@ -576,14 +584,6 @@ begin
         tag_data_trans_S2 = tag_data_S2;
     end
 end
-
-wire [`L2_OWNER_BITS-1:0] flat_id_S2;
-
-xy_to_flat_id flat_id_gen(
-    .flat_id    (flat_id_S2),
-    .x_coord    (src_x_S2_f),
-    .y_coord    (src_y_S2_f)
-);
 
 
 reg [`L2_STATE_ARRAY_WIDTH-1:0] state_data_buf_S2_f;
@@ -1952,20 +1952,18 @@ begin
     end
 end
 
-wire [(`NOC_X_WIDTH-1) : 0] owner_x_S4; 
-wire [(`NOC_Y_WIDTH-1) : 0] owner_y_S4; 
-wire [(`NOC_X_WIDTH-1) : 0] sharer_x_S4; 
-wire [(`NOC_Y_WIDTH-1) : 0] sharer_y_S4; 
-flat_id_to_xy owner_xy_gen(
-    .flat_id            (l2_way_state_owner_S4_f),
-    .x_coord            (owner_x_S4),
-    .y_coord            (owner_y_S4)
-);
-flat_id_to_xy sharer_xy_gen(
-    .flat_id            (dir_sharer_S4),
-    .x_coord            (sharer_x_S4),
-    .y_coord            (sharer_y_S4)
-);
+wire [(`NOC_X_WIDTH-1) : 0] owner_x_S4;
+wire [(`NOC_Y_WIDTH-1) : 0] owner_y_S4;
+wire [(`NOC_X_WIDTH-1) : 0] sharer_x_S4;
+wire [(`NOC_Y_WIDTH-1) : 0] sharer_y_S4;
+
+
+assign fwd_dst_flat_id_S4 = (msg_send_type_S4 == `MSG_TYPE_INV_FWD) ? dir_sharer_S4 : l2_way_state_owner_S4_f;
+assign sharer_x_S4 = fwd_dst_x_S4;
+assign sharer_y_S4 = fwd_dst_y_S4;
+assign owner_x_S4  = fwd_dst_x_S4;
+assign owner_y_S4  = fwd_dst_y_S4;
+
 
 always @ *
 begin
@@ -2040,7 +2038,9 @@ begin
         msg_send_dst_chipid_S4 = my_nodeid_chipid_S4;
         msg_send_dst_x_S4 = my_nodeid_x_S4;
         msg_send_dst_y_S4 = my_nodeid_y_S4;
-        msg_send_dst_fbits_S4 = `NOC_FBITS_L1;
+        msg_send_dst_fbits_S4 = msg_data_S4_f[63] ?
+                                msg_data_S4_f[`NOC_FBITS_WIDTH+`NOC_CHIPID_WIDTH+`NOC_Y_WIDTH+`NOC_X_WIDTH+17:`NOC_CHIPID_WIDTH+`NOC_Y_WIDTH+`NOC_X_WIDTH+18] :
+                                `NOC_FBITS_L1;
     end
     default:
     begin
@@ -2050,6 +2050,35 @@ begin
         msg_send_dst_fbits_S4 = `NOC_FBITS_L1;
     end
     endcase
+end
+
+// For L2 dir data access
+reg [63:0] dir_access_HI_S4_f;
+wire [`L2_DIR_ARRAY_WIDTH-1:0] dir_access_HI_S4;
+reg dir_access_pending_S4_f;
+
+assign dir_access_HI_S4 = (dir_data_sel_S4 >> 64);
+
+always @(posedge clk)
+begin
+    if (!rst_n)
+    begin
+        dir_access_pending_S4_f <= 1'b0;
+        dir_access_HI_S4_f <= 64'b0;
+    end
+    else if (valid_S4 && ~stall_S4 && special_addr_type_S4 &&
+            (addr_S4[`L2_ADDR_TYPE] == `L2_ADDR_TYPE_DIR_ACCESS) &&
+            ~dir_access_pending_S4_f && (`L2_DIR_ARRAY_WIDTH > 64) )
+    begin
+        dir_access_pending_S4_f <= 1'b1;
+        dir_access_HI_S4_f <= dir_access_HI_S4[63:0];
+    end
+    else if (valid_S4 && ~stall_S4 && special_addr_type_S4 &&
+            (addr_S4[`L2_ADDR_TYPE] == `L2_ADDR_TYPE_DIR_ACCESS) &&
+            dir_access_pending_S4_f )
+    begin
+        dir_access_pending_S4_f <= 1'b0;
+    end
 end
 
 always @ *
@@ -2083,7 +2112,11 @@ begin
         end
         else if (addr_S4[`L2_ADDR_TYPE] == `L2_ADDR_TYPE_DIR_ACCESS)
         begin
-            msg_send_data_S4 = {2{dir_data_sel_S4}}; 
+            // when dir data is 128 bit wide, it will send the lower 64 bits first,
+            // and then send the higher 64 bits in the next DIR_ACCESS request.
+            // In order to get the whole dir data of a line in L2, the core need to
+            // send two DIR_ACCESS requests to the same L2 line.
+            msg_send_data_S4 = dir_access_pending_S4_f ? {2{dir_access_HI_S4_f}} : {2{dir_data_sel_S4[63:0]}};
         end
         `ifndef NO_RTL_CSM
         else if (addr_S4[`L2_ADDR_TYPE] == `L2_ADDR_TYPE_SMC_ACCESS)
@@ -2168,8 +2201,9 @@ begin
     mshr_data_in_S4 = {inv_fwd_pending_S4,
                        (req_recycle_S4 && (!msg_from_mshr_S4 || recycled_S4_f)),
                        smc_miss_S4,
-                       smc_rd_addr_in_S4[`L2_SMC_ADDR_LSID],
-                       lsid_S4_f, 
+                       // TODO width not match. smc addr width should be LSID_WIDTH+SDID_WIDTH
+                       smc_rd_addr_in_S4[`MSG_LSID_WIDTH-1:0],
+                       lsid_S4_f,
                        sdid_S4,
                        src_fbits_S4_f,
                        src_y_S4_f,

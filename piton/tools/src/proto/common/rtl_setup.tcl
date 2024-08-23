@@ -41,6 +41,8 @@ set GLOBAL_INCLUDE_FILES [list \
     "${DV_ROOT}/design/include/jtag.vh" \
     "${DV_ROOT}/design/include/ifu.h" \
     "${DV_ROOT}/design/include/lsu.h" \
+    "${DV_ROOT}/design/include/dcp.h" \
+    "${DV_ROOT}/design/include/is.h" \
     "${DV_ROOT}/design/chipset/include/chipset_define.vh" \
 ]
 
@@ -69,6 +71,9 @@ set CHIP_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/common/rtl/bram_1rw_wrapper.v" \
     "${DV_ROOT}/design/common/rtl/bram_1r1w_wrapper.v" \
     "${DV_ROOT}/design/common/rtl/synchronizer.v" \
+    "${DV_ROOT}/design/common/rtl/noc_fbits_splitter.v" \
+    "${DV_ROOT}/design/common/rtl/noc_prio_merger.v" \
+    "${DV_ROOT}/design/common/rtl/sync_fifo_vr.v" \
     "${DV_ROOT}/design/chip/rtl/OCI.v" \
     "${DV_ROOT}/design/chip/rtl/chip.v" \
     "${DV_ROOT}/design/chip/pll/rtl/pll_top.v" \
@@ -85,12 +90,16 @@ set CHIP_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/chip/chip_bridge/rtl/chip_bridge_rcv_32.v" \
     "${DV_ROOT}/design/chip/chip_bridge/rtl/sync_fifo.v" \
     "${DV_ROOT}/design/chip/chip_bridge/rtl/chip_net_chooser_32.v" \
+    "${DV_ROOT}/design/chip/tile/socket/rtl/socket.v" \
     "${DV_ROOT}/design/chip/tile/dmbr/rtl/dmbr.v" \
     "${DV_ROOT}/design/chip/tile/rtl/tile.v" \
+    "${DV_ROOT}/design/chip/tile/rtl/pmesh_rvic.v" \
+    "${DV_ROOT}/design/chip/tile/rtl/rvic_wrap.sv" \
     "${DV_ROOT}/design/chip/tile/rtl/config_regs.v" \
     "${DV_ROOT}/design/chip/tile/rtl/cpx_arbitrator.v" \
     "${DV_ROOT}/design/chip/tile/rtl/ccx_l15_transducer.v" \
     "${DV_ROOT}/design/chip/tile/rtl/pico_l15_transducer.v" \
+    "${DV_ROOT}/design/chip/tile/socket/rtl/socket.v" \
     "${DV_ROOT}/design/chip/tile/l2/rtl/l2.v" \
     "${DV_ROOT}/design/chip/tile/l2/rtl/l2_priority_encoder.v" \
     "${DV_ROOT}/design/chip/tile/l2/rtl/l2_data_pgen.v" \
@@ -396,6 +405,12 @@ set CHIP_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/chip/tile/sparc/srams/rtl/sram_wrappers/sram_l1i_tag.v" \
     "${DV_ROOT}/design/chipset/rv64_platform/bootrom/baremetal/bootrom.sv"                    \
     "${DV_ROOT}/design/chipset/rv64_platform/bootrom/linux/bootrom_linux.sv"                  \
+    "${DV_ROOT}/design/chipset/rv64_platform/rv_plic/rtl/reg_intf_pkg.sv" \
+    "${DV_ROOT}/design/chipset/rv64_platform/rv_plic/rtl/rv_plic_reg_pkg.sv" \
+    "${DV_ROOT}/design/chipset/rv64_platform/rv_plic/rtl/rv_plic_target.sv"                    \
+    "${DV_ROOT}/design/chipset/rv64_platform/rv_plic/rtl/rv_plic_gateway.sv"                   \
+    "${DV_ROOT}/design/chipset/rv64_platform/rv_plic/rtl/plic_regmap.sv"                       \
+    "${DV_ROOT}/design/chipset/rv64_platform/rv_plic/rtl/plic_top.sv"                          \
     "${DV_ROOT}/design/chip/tile/ariane/core/include/cv64a6_imafdc_sv39_config_pkg.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/core/include/riscv_pkg.sv"                                 \
     "${DV_ROOT}/design/chip/tile/ariane/corev_apu/riscv-dbg/src/dm_pkg.sv"                          \
@@ -409,7 +424,6 @@ set CHIP_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/chip/tile/ariane/core/include/cvxif_pkg.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/common/submodules/common_cells/src/cf_math_pkg.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/core/cvxif_example/include/cvxif_instr_pkg.sv" \
-    "${DV_ROOT}/design/chip/tile/ariane/corev_apu/rv_plic/rtl/rv_plic_reg_pkg.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/common/local/util/sram.sv"                                     \
     "${DV_ROOT}/design/chip/tile/ariane/common/local/util/axi_master_connect.sv"                       \
     "${DV_ROOT}/design/chip/tile/ariane/common/local/util/axi_master_connect_rev.sv"                   \
@@ -497,10 +511,6 @@ set CHIP_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/chip/tile/ariane/corev_apu/openpiton/ariane_verilog_wrap.sv"                     \
     "${DV_ROOT}/design/chip/tile/ariane/corev_apu/openpiton/bootrom/baremetal/bootrom.sv"               \
     "${DV_ROOT}/design/chip/tile/ariane/corev_apu/openpiton/bootrom/linux/bootrom_linux.sv"             \
-    "${DV_ROOT}/design/chip/tile/ariane/corev_apu/rv_plic/rtl/rv_plic_target.sv"                    \
-    "${DV_ROOT}/design/chip/tile/ariane/corev_apu/rv_plic/rtl/rv_plic_gateway.sv"                   \
-    "${DV_ROOT}/design/chip/tile/ariane/corev_apu/rv_plic/rtl/plic_regmap.sv"                       \
-    "${DV_ROOT}/design/chip/tile/ariane/corev_apu/rv_plic/rtl/plic_top.sv"                          \
     "${DV_ROOT}/design/chip/tile/ariane/corev_apu/fpga/src/axi2apb/src/axi2apb_wrap.sv"                 \
     "${DV_ROOT}/design/chip/tile/ariane/corev_apu/fpga/src/axi2apb/src/axi2apb.sv"                      \
     "${DV_ROOT}/design/chip/tile/ariane/corev_apu/fpga/src/axi2apb/src/axi2apb_64_32.sv"                \
@@ -535,12 +545,33 @@ set CHIP_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/chip/tile/ariane/core/fpu/src/fpnew_rounding.sv"                              \
     "${DV_ROOT}/design/chip/tile/ariane/core/fpu/src/fpnew_top.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/core/pmp/src/pmp.sv" \
-    "${DV_ROOT}/design/chip/tile/ariane/core/pmp/src/pmp_entry.sv" \                                \
+    "${DV_ROOT}/design/chip/tile/ariane/core/pmp/src/pmp_entry.sv"                                 \
     "${DV_ROOT}/design/chip/tile/ariane/core/cvxif_example/cvxif_example_coprocessor.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/core/cvxif_example/instr_decoder.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/common/submodules/common_cells/src/counter.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/common/submodules/common_cells/src/delta_counter.sv" \
     "${DV_ROOT}/design/chip/tile/ariane/core/cvxif_fu.sv" \
+
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp.v"               \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/maple.sv"               \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_fifo_ctrl.v"     \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_chunk_req.v"     \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_buffer.v"          \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_pipe.sv"          \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_arb_rr.v"        \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_nocbuffer_dec.v" \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_noc1decoder.v"   \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_nocdecoder.v"    \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_noc1encoder.v"   \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_noc1buffer.v"    \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_noc2encoder.v"   \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dcp_noc2buffer.v"    \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dream.sv"    \
+    "${DV_ROOT}/design/chip/tile/is/llama/rtl/dream_mshr.v"    \
+    "${DV_ROOT}/design/chip/tile/is/rtl/io_mmu.sv"    \
+    "${DV_ROOT}/design/chip/tile/is/rtl/io_tlb.sv"    \
+    "${DV_ROOT}/design/chip/tile/is/rtl/io_ptw.sv"    \
+    "${DV_ROOT}/design/chip/tile/is/rtl/is_core.v"    \
 ]
 
 set CHIP_INCLUDE_FILES [list \
@@ -620,6 +651,7 @@ set CHIPSET_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/chipset/rtl/storage_addr_trans.v" \
     "${DV_ROOT}/design/chipset/rtl/storage_addr_trans_unified.v" \
     "${DV_ROOT}/design/chipset/rtl/test_end_checker.v" \
+    "${DV_ROOT}/design/chipset/rtl/int_noc_bridge.v" \
     "${DV_ROOT}/design/chipset/common/rtl/noc_bidir_afifo.v" \
     "${DV_ROOT}/design/common/fpga_bridge/rtl/fpga_bridge.v" \
     "${DV_ROOT}/design/common/fpga_bridge/fpga_send/rtl/fpga_net_chooser_32.v" \
@@ -645,6 +677,7 @@ set CHIPSET_RTL_IMPL_FILES [list \
     "${DV_ROOT}/design/chipset/io_xbar/components/rtl/io_xbar_bus_compare_equal.v" \
     "${DV_ROOT}/design/chipset/io_xbar/components/rtl/io_xbar_flip_bus.v" \
     "${DV_ROOT}/design/chipset/io_ctrl/rtl/ciop_iob.v" \
+    "${DV_ROOT}/design/chipset/io_ctrl/rtl/int_pkt_gen.v" \
     "${DV_ROOT}/design/chipset/io_ctrl/rtl/net_int_sync.v" \
     "${DV_ROOT}/design/chipset/io_ctrl/rtl/uart_top.v" \
     "${DV_ROOT}/design/chipset/io_ctrl/rtl/uart_writer.v" \

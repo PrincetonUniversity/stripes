@@ -82,7 +82,7 @@ const char info[] = {
        timeStamp,
        int(os.environ['PITON_X_TILES']),
        int(os.environ['PITON_Y_TILES']),
-       int(os.environ['PITON_NUM_TILES']),
+       int(PITON_RV64_TILES),
        sysFreq,
        os.environ['PITON_NETWORK_CONFIG'],
        int(memLen/1024/1024),
@@ -200,6 +200,7 @@ def gen_riscv_dts(devices, nCpus, cpuFreq, timeBaseFreq, periphFreq, dtsPath, ti
     # TODO: this needs to be extended
     # get the number of interrupt sources
     numIrqs = 0
+    ioDeviceNr=1
     devWithIrq = ["uart", "net"];
     for i in range(len(devices)):
         if devices[i]["name"] in devWithIrq:
@@ -207,42 +208,57 @@ def gen_riscv_dts(devices, nCpus, cpuFreq, timeBaseFreq, periphFreq, dtsPath, ti
 
 
     # get the remaining periphs
-    ioDeviceNr=1
     for i in range(len(devices)):
-        # CLINT
-        if devices[i]["name"] == "ariane_clint":
+        if not PITON_RVIC:
+            # CLINT
+            if devices[i]["name"] == "ariane_clint":
+                addrBase = devices[i]["base"]
+                addrLen  = devices[i]["length"]
+                tmpStr += '''
+            clint@%08x {
+                compatible = "riscv,clint0";
+                interrupts-extended = <''' % (addrBase)
+                for k in range(nCpus):
+                    tmpStr += "&CPU%d_intc 3 &CPU%d_intc 7 " % (k,k)
+                tmpStr += '''>;
+                reg = <%s>;
+                reg-names = "control";
+            };
+                ''' % (_reg_fmt(addrBase, addrLen, 2, 2))
+            # PLIC
+            if devices[i]["name"] == "ariane_plic":
+                addrBase = devices[i]["base"]
+                addrLen  = devices[i]["length"]
+                tmpStr += '''
+            PLIC0: plic@%08x {
+                #address-cells = <0>;
+                #interrupt-cells = <1>;
+                compatible = "riscv,plic0";
+                interrupt-controller;
+                interrupts-extended = <''' % (addrBase)
+                for k in range(nCpus):
+                    tmpStr += "&CPU%d_intc 11 &CPU%d_intc 9 " % (k,k)
+                tmpStr += '''>;
+                reg = <%s>;
+                riscv,max-priority = <7>;
+                riscv,ndev = <%d>;
+            };
+                ''' % (_reg_fmt(addrBase, addrLen, 2, 2), numIrqs)
+        # DTM
+        if devices[i]["name"] == "ariane_debug":
             addrBase = devices[i]["base"]
             addrLen  = devices[i]["length"]
             tmpStr += '''
-        clint@%08x {
-            compatible = "riscv,clint0";
+        debug-controller@%08x {
+            compatible = "riscv,debug-013";
             interrupts-extended = <''' % (addrBase)
             for k in range(nCpus):
-                tmpStr += "&CPU%d_intc 3 &CPU%d_intc 7 " % (k,k)
+                tmpStr += "&CPU%d_intc 65535 " % (k)
             tmpStr += '''>;
             reg = <%s>;
             reg-names = "control";
         };
             ''' % (_reg_fmt(addrBase, addrLen, 2, 2))
-        # PLIC
-        if devices[i]["name"] == "ariane_plic":
-            addrBase = devices[i]["base"]
-            addrLen  = devices[i]["length"]
-            tmpStr += '''
-        PLIC0: plic@%08x {
-            #address-cells = <0>;
-            #interrupt-cells = <1>;
-            compatible = "riscv,plic0";
-            interrupt-controller;
-            interrupts-extended = <''' % (addrBase)
-            for k in range(nCpus):
-                tmpStr += "&CPU%d_intc 11 &CPU%d_intc 9 " % (k,k)
-            tmpStr += '''>;
-            reg = <%s>;
-            riscv,max-priority = <7>;
-            riscv,ndev = <%d>;
-        };
-            ''' % (_reg_fmt(addrBase, addrLen, 2, 2), numIrqs)
         # UART
         if devices[i]["name"] == "uart":
             addrBase = devices[i]["base"]
@@ -292,7 +308,7 @@ def gen_riscv_dts(devices, nCpus, cpuFreq, timeBaseFreq, periphFreq, dtsPath, ti
             };
         };
             ''' % (addrBase, _reg_fmt(addrBase, addrLen, 2, 2), ioDeviceNr)
-            ioDeviceNr+=1
+            ioDeviceNr += 1
 
         # eth: lowrisc-eth@%08x {
         #     compatible = "lowrisc-eth";
@@ -302,6 +318,40 @@ def gen_riscv_dts(devices, nCpus, cpuFreq, timeBaseFreq, periphFreq, dtsPath, ti
         #     local-mac-address = [ee e1 e2 e3 e4 e5];
         #     reg = <%s>;
         # };
+
+    if PITON_RVIC:
+        # CLINT
+        addrBase = 0xe103c00000 #devices[i]["base"]
+        addrLen  = 0xc0000 #devices[i]["length"]
+        tmpStr += '''
+    clint@%08x {
+        compatible = "riscv,clint0";
+        interrupts-extended = <''' % (addrBase)
+        for k in range(nCpus):
+            tmpStr += "&CPU%d_intc 3 &CPU%d_intc 7 " % (k,k)
+        tmpStr += '''>;
+        reg = <%s>;
+        reg-names = "control";
+    };
+        ''' % (_reg_fmt(addrBase, addrLen, 2, 2))
+        # PLIC
+        addrBase = 0xe200000000 #devices[i]["base"]
+        addrLen  = 0x4000000 #devices[i]["length"]
+        tmpStr += '''
+    PLIC0: plic@%08x {
+        #address-cells = <0>;
+        #interrupt-cells = <1>;
+        compatible = "riscv,plic0";
+        interrupt-controller;
+        interrupts-extended = <''' % (addrBase)
+        for k in range(nCpus):
+            tmpStr += "&CPU%d_intc 11 &CPU%d_intc 9 " % (k,k)
+        tmpStr += '''>;
+        reg = <%s>;
+        riscv,max-priority = <7>;
+        riscv,ndev = <%d>;
+    };
+        ''' % (_reg_fmt(addrBase, addrLen, 2, 2), numIrqs)
 
     tmpStr += '''
     };

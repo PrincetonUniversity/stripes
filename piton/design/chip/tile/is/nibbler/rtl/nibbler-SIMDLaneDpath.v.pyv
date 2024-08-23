@@ -1,0 +1,258 @@
+// Copyright (c) 2024 Princeton University
+// All rights reserved.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+`ifndef NIBBLER_SIMD_LANE_DPATH_V
+`define NIBBLER_SIMD_LANE_DPATH_V
+
+<%
+from pyhplib import *
+%>
+
+
+module nibbler_SIMDLaneDpath
+(
+
+  input         clk,
+  input         reset,
+
+
+<%
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0] vrf_out_a_Xhl,')
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0] vrf_out_b_Xhl,')
+%>
+  
+  // ALU Inputs
+  `ifdef NIBBLER_VECTOR_SHIFT 
+  input                 shift_inst_dir_Xhl,
+  input                 signed_off_msb_Xhl,
+  input                 a_offset_mux_sel_Xhl,
+<%
+if NIBBLER_P_NBITS == 1:
+  print("      input                 bitwise_shamt_Xhl, // dummy for bit-serial")
+else:
+  print("      input ["+str(NIBBLER_C_LOG_NBITS-1)+":0] bitwise_shamt_Xhl,")
+%>
+  input                 adj_sw_mux_sel_Xhl,
+  input                 adj_sw_reg_en_Xhl,
+
+  `endif
+<%
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0]   b_imm_Xhl,')
+%>
+  input                 b_mux_sel_Xhl,
+
+  input       addsub_fn_Xhl,
+  input [1:0] logic_fn_Xhl,
+  input [1:0] alu_fn_type_Xhl,
+
+  input         prop_flag_Xhl,
+  input         carry_in_1_Xhl,
+  input         flag_reg_en_Xhl,
+
+  // Outputs to Scalar core for summary
+<%
+print('  output reg ['+str(NIBBLER_P_NBITS-1)+':0] alu_mux_out_Xhl   // For use in writing to CSR')
+%>
+
+);
+
+<%
+print('  localparam NIBBLER_P_NBITS = '+str(NIBBLER_P_NBITS) + ';')
+print('  localparam NIBBLER_C_LOG_NBITS = '+str(NIBBLER_C_LOG_NBITS) + ';')
+print('  localparam NIBBLER_C_OFFBITS = '+str(NIBBLER_C_OFFBITS) + ';')
+%>
+
+  //-------------------------
+  // Register Read Stage (R)
+  //-------------------------
+  // // Declarations
+  // wire [NIBBLER_P_NBITS-1:0] a_data_Rhl;
+  // wire [NIBBLER_P_NBITS-1:0] b_data_Rhl;
+  
+
+  // // Regfile
+  // nibbler_CoreDpathRegfile rfile
+  // (
+  //   .clk     (clk),
+  //   // Register read
+  //   .raddr0_Rhl  (rega_addr_Rhl),
+  //   .roff0_Rhl   (a_subword_off_Rhl),
+  //   .rdata0_Rhl  (a_data_Rhl),
+
+  //   .raddr1_Rhl  (regb_addr_Rhl),
+  //   .roff1_Rhl   (b_subword_off_Rhl),
+  //   .rdata1_Rhl  (b_data_Rhl),
+
+  //   // Register write
+  //   .wen_Xhl     (wb_en_Xhl),
+  //   .waddr_Xhl   (wb_addr_Xhl),
+  //   .woffset_Xhl (wb_subword_off_Xhl),
+  //   .wdata_Xhl   (alu_mux_out_Xhl)
+  // );
+
+  //-------------------
+  // Execute Stage (X)
+  //-------------------
+  wire [NIBBLER_P_NBITS-1:0] a_data_Xhl = vrf_out_a_Xhl;
+  wire [NIBBLER_P_NBITS-1:0] b_data_Xhl = vrf_out_b_Xhl;
+
+  wire [NIBBLER_P_NBITS-1:0] a_mux_out_Xhl = a_data_Xhl;
+  // TODO: Refactor to scalar lane
+   wire [NIBBLER_P_NBITS-1:0] b_mux_out_Xhl = b_mux_sel_Xhl ? b_data_Xhl : b_imm_Xhl;
+  
+  reg carry_out_reg_Xhl;
+  reg msb_reg_Xhl;
+  // Microcode sets prop_flag_Xhl high if it propagates either the MSB (carry_in_1=1) or carry out (carry_in_1=0) 
+  wire cmp_flag_type_Xhl = carry_in_1_Xhl; 
+  wire cmp_flag_mux_out_Xhl = cmp_flag_type_Xhl ? msb_reg_Xhl : carry_out_reg_Xhl;
+  // Otherwise, carry-in is set constant. Use that constant.
+  wire carry_in_Xhl = prop_flag_Xhl ? cmp_flag_mux_out_Xhl : carry_in_1_Xhl;
+  
+  // ALU
+  wire [NIBBLER_P_NBITS-1:0] sum_out_Xhl;
+  wire carry_out_Xhl;
+  wire a_b_not_eq_Xhl;
+  wire [NIBBLER_P_NBITS-1:0] fn_out_Xhl;
+  `ifdef NIBBLER_VECTOR_SHIFT
+  reg [NIBBLER_P_NBITS-1:0] adj_sw_sh_reg_Xhl;
+  wire [NIBBLER_P_NBITS-1:0] shift_out_Xhl;
+
+  `endif
+
+  nibbler_CoreDpathAlu alu
+  (
+    .in_a         (a_mux_out_Xhl),
+    .in_b         (b_mux_out_Xhl),      
+    .in_c         (carry_in_Xhl),
+    .addsub_fn    (addsub_fn_Xhl),
+    .logic_fn     (logic_fn_Xhl),
+`ifdef NIBBLER_VECTOR_SHIFT
+    .shift_dir           (shift_inst_dir_Xhl),
+    .signed_off_msb      (signed_off_msb_Xhl),
+    .bitwise_subword_sel (a_offset_mux_sel_Xhl),
+    .in_adj_subword      (adj_sw_sh_reg_Xhl),
+    .bitwise_shamt       (bitwise_shamt_Xhl),
+    .shift_out           (shift_out_Xhl),
+`endif
+
+    .sum_out      (sum_out_Xhl),     
+    .carry_out    (carry_out_Xhl),
+    .a_b_not_eq   (a_b_not_eq_Xhl),
+    .fn_out       (fn_out_Xhl)
+  );
+
+
+  localparam INST_ARITH = 2'b00;
+  localparam INST_JALR  = 2'b11;
+  localparam INST_LOGIC = 2'b01;
+  localparam INST_SHIFT = 2'b10;
+
+
+  always @ (*) begin
+    alu_mux_out_Xhl = sum_out_Xhl;
+    case (alu_fn_type_Xhl)
+      INST_ARITH: alu_mux_out_Xhl = sum_out_Xhl;
+      INST_JALR:  alu_mux_out_Xhl = sum_out_Xhl & {{(NIBBLER_P_NBITS-1){1'b1}}, 1'b0}; // Bitwize and with fffe for jalr.
+      INST_LOGIC: alu_mux_out_Xhl = fn_out_Xhl;
+      `ifdef NIBBLER_VECTOR_SHIFT
+      INST_SHIFT: alu_mux_out_Xhl = shift_out_Xhl;
+      `endif
+      default:    alu_mux_out_Xhl = sum_out_Xhl;
+    endcase
+  end
+
+
+  // Carry-in/out flag register
+  //----------------------------
+  // Used in ADD/SUB ALU operations
+  reg carry_out_reg_Xhl_next;
+  always @ (*)
+  begin
+    carry_out_reg_Xhl_next = carry_out_reg_Xhl;
+    if (reset) begin
+      carry_out_reg_Xhl_next = 1'b0;
+    end else if (flag_reg_en_Xhl) begin
+      carry_out_reg_Xhl_next = carry_out_Xhl;
+    end
+  end
+
+  always @(posedge clk) begin
+    carry_out_reg_Xhl <= carry_out_reg_Xhl_next;
+  end
+
+  // MSB flag register
+  //-------------------
+  // Used for less-than comparisons
+  // Flag is set if A < B
+  // Less than Function: (!(!AB) & SUM) || A!B
+  // They are same sign and Difference produces a negative result || A is negative is B is Positive
+  reg msb_reg_Xhl_next;
+  always @ (*)
+  begin
+    msb_reg_Xhl_next = msb_reg_Xhl;
+    if (reset) begin
+      msb_reg_Xhl_next = 1'b0;
+    end else if (flag_reg_en_Xhl) begin
+      msb_reg_Xhl_next = (!(!a_mux_out_Xhl[NIBBLER_P_NBITS-1] && b_mux_out_Xhl[NIBBLER_P_NBITS-1]) && sum_out_Xhl[NIBBLER_P_NBITS-1]) || (a_mux_out_Xhl[NIBBLER_P_NBITS-1] && !b_mux_out_Xhl[NIBBLER_P_NBITS-1]);
+    end
+  end
+
+  always @(posedge clk) begin
+    msb_reg_Xhl <= msb_reg_Xhl_next;
+  end
+
+
+`ifdef NIBBLER_VECTOR_SHIFT 
+
+  // Adjacent Subword Regiser
+  //--------------------------
+  reg [NIBBLER_P_NBITS-1:0] adj_sw_sh_reg_Xhl_next;
+  always @(*)
+  begin
+    adj_sw_sh_reg_Xhl_next = adj_sw_sh_reg_Xhl;
+    if (reset) begin
+      adj_sw_sh_reg_Xhl_next = {NIBBLER_P_NBITS{1'b0}};
+    end else if (adj_sw_reg_en_Xhl) begin
+      adj_sw_sh_reg_Xhl_next = adj_sw_mux_sel_Xhl ? {NIBBLER_P_NBITS{msb_reg_Xhl}} : a_mux_out_Xhl;
+    end
+  end
+
+  // Gate Clock
+  wire adj_gate_en_Xhl = !(adj_sw_reg_en_Xhl || reset);
+  wire adj_reg_clk_gated_Xhl;
+
+  nibbler_ClkEnBuf adj_reg_clk_gate
+  (
+    .clk  (adj_reg_clk_gated_Xhl),
+    .rclk (clk),
+    .en_l (adj_gate_en_Xhl)
+  );
+
+  always @(posedge adj_reg_clk_gated_Xhl) begin
+    adj_sw_sh_reg_Xhl <= adj_sw_sh_reg_Xhl_next;
+  end
+`endif // NIBBLER_VECTOR_SHIFT
+
+endmodule
+`endif

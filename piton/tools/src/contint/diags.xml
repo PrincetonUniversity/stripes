@@ -474,6 +474,16 @@
     </asm_regress>
 </jtag>
 
+<jtag_ariane>
+    <asm_regress name="jtag_ariane">
+        <sys>jtag_testbench</sys>
+        <x_tiles>2</x_tiles>
+		<y_tiles>1</y_tiles>
+        <group>jtag_ariane</group>
+        <ariane/>
+    </asm_regress>
+</jtag_ariane>
+
 <pico_tile1>
     <asm_regress name="pico_tile1">
         <sys>manycore</sys>

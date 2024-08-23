@@ -81,6 +81,11 @@ module noc1encoder(
    output reg                       l15_dmbr_l1missIn,
    output reg [`DMBR_TAG_WIDTH-1:0] l15_dmbr_l1missTag,
 
+   // flat_id_to_xy interface
+   output reg [`HOME_ID_WIDTH-1:0] t1_interrupt_cpuid,
+   input wire [`NOC_X_WIDTH-1:0]   msg_dest_l2_xpos_compat,
+   input wire [`NOC_Y_WIDTH-1:0]   msg_dest_l2_ypos_compat,
+
    // csm interface
    input wire csm_noc1encoder_req_val,
    input wire [`L15_NOC1_REQTYPE_WIDTH-1:0] csm_noc1encoder_req_type,
@@ -227,14 +232,13 @@ begin
 
 end
 
+
 // translate req_ -> msg_
 reg [`PHY_ADDR_WIDTH-1:0]              msg_address;
 reg [`NOC_X_WIDTH-1:0]                 msg_dest_l2_xpos;
 reg [`NOC_Y_WIDTH-1:0]                 msg_dest_l2_ypos;
 reg [`NOC_X_WIDTH-1:0]                 msg_dest_l2_xpos_new;
 reg [`NOC_Y_WIDTH-1:0]                 msg_dest_l2_ypos_new;
-wire [`NOC_X_WIDTH-1:0]                msg_dest_l2_xpos_compat;
-wire [`NOC_Y_WIDTH-1:0]                msg_dest_l2_ypos_compat;
 reg [`NOC_CHIPID_WIDTH-1:0]            msg_dest_chipid;
 reg [`NOC_FBITS_WIDTH-1:0]             msg_dest_fbits;
 reg [`NOC_X_WIDTH-1:0]                 msg_src_xpos;
@@ -252,7 +256,7 @@ reg [`MSG_OPTIONS_3_]                  msg_options_3;
 reg [`MSG_CACHE_TYPE_WIDTH-1:0]        msg_cache_type;
 reg [`MSG_SUBLINE_VECTOR_WIDTH-1:0]    msg_subline_vector;
 reg [`MSG_DATA_SIZE_WIDTH-1:0]         msg_data_size;
-reg [5:0] t1_interrupt_cpuid;
+
 always @ *
 begin
    msg_length = 0;
@@ -277,7 +281,9 @@ begin
    // For interrupt controller access, hard code the fbits. This is DECADES_CHIP specific. 
    // otherwise set fbits to 0 (target L2)
    msg_dest_fbits = (noc1buffer_noc1encoder_req_address[39:33] == 7'b1110000) ?
-                   noc1buffer_noc1encoder_req_address[`ON_CHIP_DEV_FBITS] : `NOC_FBITS_L2;
+                    noc1buffer_noc1encoder_req_address[`ON_CHIP_DEV_FBITS] :
+		    ((noc1buffer_noc1encoder_req_address[39:28]==12'he20) ? `NOC_FBITS_PLIC 
+		      : `NOC_FBITS_L2);
 
    // default value for a message, will be overwritten by interrupt reqs
    msg_dest_l2_xpos = req_dest_l2_xpos;
@@ -355,8 +361,10 @@ begin
       begin
          msg_type = `MSG_TYPE_INTERRUPT_FWD;
          msg_length = 1; // just 1 data
-         control_raw_data_flit1 = 1'b1;
-         t1_interrupt_cpuid = req_data0[14:9];
+         control_raw_data_flit1 = 1'b1; 
+         //flatid version of interrupt(compact IPI) only support up to 64 tiles,
+         //For more than 64 tiles we need to require only using xy version of interrupt
+         t1_interrupt_cpuid[5:0] = req_data0[14:9];
          msg_dest_l2_xpos_new = req_data0[`NOC_X_WIDTH+17:18];
          msg_dest_l2_ypos_new = req_data0[`NOC_Y_WIDTH+`NOC_X_WIDTH+17:`NOC_X_WIDTH+18];
          msg_dest_l2_xpos = req_data0[63] ? msg_dest_l2_xpos_new : msg_dest_l2_xpos_compat; 
@@ -420,12 +428,6 @@ begin
    endcase
 end
 
-flat_id_to_xy cpuid_to_xy (
-    .flat_id(t1_interrupt_cpuid),
-    .x_coord(msg_dest_l2_xpos_compat),
-    .y_coord(msg_dest_l2_ypos_compat)
-    );
-
 always @ *
 begin
    msg_options_1 = 0;
@@ -461,6 +463,7 @@ begin
    begin
       if (control_raw_data_flit1)
       begin
+         // Only for the INTERRUPT_FWD message
          flit[`NOC_DATA_WIDTH-1:0] = req_data0;
          // also need to suppress cpuid before sending
          flit[15:9] = 0;

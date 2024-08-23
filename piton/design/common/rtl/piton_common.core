@@ -29,5 +29,7 @@ generate:
         generator: pyhp_preprocess_gen
         parameters:
             process_me: [[noc_prio_merger.v.pyv, noc_prio_merger.tmp.v],
-                         [noc_fbits_splitter.v.pyv, noc_fbits_splitter.tmp.v]]
+                         [noc_fbits_splitter.v.pyv, noc_fbits_splitter.tmp.v],
+                         [sram_chunk_data.v.pyv, sram_chunk_data.tmp.v]]
             
+

@@ -1,0 +1,856 @@
+// Copyright (c) 2020 Princeton University
+// All rights reserved.
+
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+`include "l15.tmp.h"
+`include "prga_axi4.vh"
+
+`ifdef DEFAULT_NETTYPE_NONE
+`default_nettype none
+`endif
+
+<%
+import pyhplib
+from riscvlib import *
+import os
+from pyhplib import *
+import riscvlib
+import sys
+
+# Add pyocn/py to python path
+if PITON_NETWORK_CONFIG == "pyocn_config" or PITON_NETWORK_CONFIG == "pyocn_router_config":
+    DV_ROOT = os.getenv( 'DV_ROOT' )
+    assert DV_ROOT is not None, "Environment variable DV_ROOT is not defined!"
+    sys.path.insert( 0, os.path.join( DV_ROOT, 'design/chip/pyocn/py' ) )
+    import pyocn_tile_utils
+%>
+
+module prga_ctrl_core (
+    input wire                                  clk,
+    input wire                                  rst_n,
+
+<% 
+if PITON_NETWORK_CONFIG == "pyocn_router_config":
+    s = '''
+    input [`NOC_DATA_WIDTH-1:0]         dyn0_in_N_dat,
+    input                               dyn0_in_N_val,
+    output                              dyn0_in_N_rdy,
+    input [`NOC_DATA_WIDTH-1:0]         dyn1_in_N_dat,
+    input                               dyn1_in_N_val,
+    output                              dyn1_in_N_rdy,
+    input [`NOC_DATA_WIDTH-1:0]         dyn2_in_N_dat,
+    input                               dyn2_in_N_val,
+    output                              dyn2_in_N_rdy,
+    output [`NOC_DATA_WIDTH-1:0]        dyn0_out_N_dat,
+    output                              dyn0_out_N_val,
+    input                               dyn0_out_N_rdy,
+    output [`NOC_DATA_WIDTH-1:0]        dyn1_out_N_dat,
+    output                              dyn1_out_N_val,
+    input                               dyn1_out_N_rdy,
+    output [`NOC_DATA_WIDTH-1:0]        dyn2_out_N_dat,
+    output                              dyn2_out_N_val,
+    input                               dyn2_out_N_rdy,
+
+    output [`NOC_DATA_WIDTH-1:0]         dyn0_in_N_dat_s2c,
+    output                               dyn0_in_N_val_s2c,
+    input                                dyn0_in_N_rdy_s2c,
+    output [`NOC_DATA_WIDTH-1:0]         dyn1_in_N_dat_s2c,
+    output                               dyn1_in_N_val_s2c,
+    input                                dyn1_in_N_rdy_s2c,
+    output [`NOC_DATA_WIDTH-1:0]         dyn2_in_N_dat_s2c,
+    output                               dyn2_in_N_val_s2c,
+    input                                dyn2_in_N_rdy_s2c,
+    input [`NOC_DATA_WIDTH-1:0]         dyn0_out_N_dat_s2c,
+    input                               dyn0_out_N_val_s2c,
+    output                              dyn0_out_N_rdy_s2c,
+    input [`NOC_DATA_WIDTH-1:0]         dyn1_out_N_dat_s2c,
+    input                               dyn1_out_N_val_s2c,
+    output                              dyn1_out_N_rdy_s2c,
+    input [`NOC_DATA_WIDTH-1:0]         dyn2_out_N_dat_s2c,
+    input                               dyn2_out_N_val_s2c,
+    output                              dyn2_out_N_rdy_s2c,
+    '''
+    print(s)
+%>
+
+    // == NoC Interface ======================================================
+    input wire                                  noc_core_vr_noc1_val,
+    input wire [`NOC_DATA_WIDTH-1:0]            noc_core_vr_noc1_data,
+    output wire                                 core_noc_vr_noc1_rdy,
+
+    output wire                                 core_noc_vr_noc2_val,
+    output wire [`NOC_DATA_WIDTH-1:0]           core_noc_vr_noc2_data,
+    input wire                                  noc_core_vr_noc2_rdy,
+
+    // == Adapter -> L15 =====================================================
+    // Outputs
+    output wire                                 transducer_l15_val,
+    output wire [4:0]                           transducer_l15_rqtype,
+    output wire [2:0]                           transducer_l15_size,
+    output wire [39:0]                          transducer_l15_address,
+    output wire [63:0]                          transducer_l15_data,
+    output wire [`L15_THREADID_MASK]            transducer_l15_threadid,
+    output wire [`L15_AMO_OP_WIDTH-1:0]         transducer_l15_amo_op,
+
+    // ACK
+    input wire                                  l15_transducer_ack,
+    input wire                                  l15_transducer_header_ack,
+
+    // Unused outputs
+    output wire                                 transducer_l15_nc,
+    output wire [1:0]                           transducer_l15_l1rplway,
+    output wire                                 transducer_l15_prefetch,
+    output wire                                 transducer_l15_invalidate_cacheline,    // L1 invalidation
+    output wire                                 transducer_l15_blockstore,
+    output wire                                 transducer_l15_blockinitstore,
+    output wire [63:0]                          transducer_l15_data_next_entry, // unused (for CAS only)
+    output wire [`TLB_CSM_WIDTH-1:0]            transducer_l15_csm_data,        // unused (for CDR only)
+
+    // == L15 -> Adapter =====================================================
+    // Inputs
+    input wire                                  l15_transducer_val,
+    input wire [3:0]                            l15_transducer_returntype,
+    input wire [15:4]                           l15_transducer_inval_address_15_4,
+    input wire [`L15_THREADID_MASK]             l15_transducer_threadid,
+    input wire [63:0]                           l15_transducer_data_0,
+    input wire [63:0]                           l15_transducer_data_1,
+    input wire                                  l15_transducer_noncacheable,
+
+    // ACK: Must be asserted in the same cycle when `l15_transducer_val` is asserted
+    output wire                                 transducer_l15_req_ack,
+
+    // == PRGA controller <-> Programming backend ============================
+    output wire                                     prog_rst_n,
+    input wire [`PRGA_PROG_STATUS_WIDTH-1:0]        prog_status,
+
+    input wire                                      prog_req_rdy,
+    output wire                                     prog_req_val,
+    output wire [`PRGA_CREG_ADDR_WIDTH-1:0]         prog_req_addr,
+    output wire [`PRGA_CREG_DATA_BYTES-1:0]         prog_req_strb,
+    output wire [`PRGA_CREG_DATA_WIDTH-1:0]         prog_req_data,
+
+    input wire                                      prog_resp_val,
+    output wire                                     prog_resp_rdy,
+    input wire                                      prog_resp_err,
+    input wire [`PRGA_CREG_DATA_WIDTH-1:0]          prog_resp_data,
+
+    // == Application Control Signals ========================================
+    output wire                                     aclk,
+    output wire                                     arst_n,
+
+    // == Generic Register-based Interface ===================================
+    output wire                                     urst_n,
+
+    input wire                                      ureg_req_rdy,
+    output wire                                     ureg_req_val,
+    output wire [`PRGA_CREG_ADDR_WIDTH-1:0]         ureg_req_addr,
+    output wire [`PRGA_CREG_DATA_BYTES-1:0]         ureg_req_strb,
+    output wire [`PRGA_CREG_DATA_WIDTH-1:0]         ureg_req_data,
+
+    output wire                                     ureg_resp_rdy,
+    input wire                                      ureg_resp_val,
+    input wire [`PRGA_CREG_DATA_WIDTH-1:0]          ureg_resp_data,
+    input wire [`PRGA_ECC_WIDTH-1:0]                ureg_resp_ecc,
+
+    // == AXI4 Slave Interface ===============================================
+    // -- AW channel --
+    output wire                                 awready,
+    input wire                                  awvalid,
+    input wire [`PRGA_AXI4_ID_WIDTH-1:0]        awid,
+    input wire [`PRGA_AXI4_ADDR_WIDTH-1:0]      awaddr,
+    input wire [`PRGA_AXI4_AXLEN_WIDTH-1:0]     awlen,
+    input wire [`PRGA_AXI4_AXSIZE_WIDTH-1:0]    awsize,
+    input wire [`PRGA_AXI4_AXBURST_WIDTH-1:0]   awburst,
+
+    // non-standard use of AWCACHE: Only |AWCACHE[3:2] is checked: 1'b1: cacheable; 1'b0: non-cacheable
+    input wire [`PRGA_AXI4_AXCACHE_WIDTH-1:0]   awcache,
+
+    // ECC
+    input wire [`PRGA_CCM_ECC_WIDTH-1:0]        awuser,
+
+    // not used
+    //  input wire                                  awlock,     // all atomic operations are done through AR channel
+    //  input wire [2:0]                            awprot,
+    //  input wire [3:0]                            awqos,
+    //  input wire [3:0]                            awregion,
+
+    // -- W channel --
+    output wire                                 wready,
+    input wire                                  wvalid,
+    input wire [`PRGA_AXI4_DATA_WIDTH-1:0]      wdata,
+    input wire [`PRGA_AXI4_DATA_BYTES-1:0]      wstrb,
+    input wire                                  wlast,
+
+    // ECC
+    input wire [`PRGA_CCM_ECC_WIDTH-1:0]        wuser,
+
+    // -- B channel --
+    input wire                                  bready,
+    output wire                                 bvalid,
+    output wire [`PRGA_AXI4_XRESP_WIDTH-1:0]    bresp,
+    output wire [`PRGA_AXI4_ID_WIDTH-1:0]       bid,
+
+    // -- AR channel --
+    output wire                                 arready,
+    input wire                                  arvalid,
+    input wire [`PRGA_AXI4_ID_WIDTH-1:0]        arid,
+    input wire [`PRGA_AXI4_ADDR_WIDTH-1:0]      araddr,
+    input wire [`PRGA_AXI4_AXLEN_WIDTH-1:0]     arlen,
+    input wire [`PRGA_AXI4_AXSIZE_WIDTH-1:0]    arsize,
+    input wire [`PRGA_AXI4_AXBURST_WIDTH-1:0]   arburst,
+
+    // non-standard use of ARLOCK: indicates an atomic operation.
+    // Type of the atomic operation is specified in the ARUSER field
+    input wire                                  arlock,
+
+    // non-standard use of ARCACHE: Only |ARCACHE[3:2] is checked: 1'b1: cacheable; 1'b0: non-cacheable
+    input wire [`PRGA_AXI4_AXCACHE_WIDTH-1:0]   arcache,
+
+    // ATOMIC operation type, data & ECC:
+    //      aruser[`PRGA_CCM_ECC_WIDTH + `PRGA_CCM_AMO_OPCODE_WIDTH +: `PRGA_CCM_DATA_WIDTH]        amo_data
+    //      aruser[`PRGA_CCM_ECC_WIDTH                              +: `PRGA_CCM_AMO_OPCODE_WIDTH]  amo_opcode
+    //      aruser[0                                                +: `PRGA_CCM_ECC_WIDTH]         ecc
+    input wire [`PRGA_CCM_AMO_OPCODE_WIDTH + `PRGA_CCM_ECC_WIDTH + `PRGA_CCM_DATA_WIDTH - 1:0]      aruser,
+
+    // not used
+    //  input wire [2:0]                            arprot,
+    //  input wire [3:0]                            arqos,
+    //  input wire [3:0]                            arregion,
+
+    // -- R channel --
+    input wire                                  rready,
+    output wire                                 rvalid,
+    output wire [`PRGA_AXI4_XRESP_WIDTH-1:0]    rresp,
+    output wire [`PRGA_AXI4_ID_WIDTH-1:0]       rid,
+    output wire [`PRGA_AXI4_DATA_WIDTH-1:0]     rdata,
+    output wire                                 rlast
+
+    // == RVIC-specific interface ============================================
+`ifdef PITON_RVIC
+    ,
+    // PLIC
+    output wire [`PITON_RV64_TILES*2-1:0]           irq_o,       // output from pmesh_rvic targets
+
+    // CLINT
+    output wire [`PITON_RV64_TILES-1:0]             timer_irq_o,
+    output wire [`PITON_RV64_TILES-1:0]             ipi_o
+`endif /* `ifdef PITON_RVIC */
+    );
+
+
+    // =======================================================================
+    // == Feed through NoC wires =============================================
+    // =======================================================================
+<% 
+if PITON_NETWORK_CONFIG == "pyocn_router_config":
+    s = pyocn_tile_utils.feed_through_connection()
+    print(s)
+%>
+
+    // =======================================================================
+    // == NoC Splitter/Merger ================================================
+    // =======================================================================
+
+    // pre-merger/splitter buffer
+    
+    wire                                    noc_core_vr_noc1_val_f;
+    wire [`NOC_DATA_WIDTH-1:0]              noc_core_vr_noc1_data_f;
+    wire                                    core_noc_vr_noc1_rdy_p;
+    
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_noc_core_noc1 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (core_noc_vr_noc1_rdy)
+        ,.val_i         (noc_core_vr_noc1_val)
+        ,.data_i        (noc_core_vr_noc1_data)
+        ,.rdy_i         (core_noc_vr_noc1_rdy_p)
+        ,.val_o         (noc_core_vr_noc1_val_f)
+        ,.data_o        (noc_core_vr_noc1_data_f)
+        );
+
+    wire                                    core_noc_vr_noc2_val_p;
+    wire [`NOC_DATA_WIDTH-1:0]              core_noc_vr_noc2_data_p;
+    wire                                    noc_core_vr_noc2_rdy_f;
+
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_core_noc_noc2 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (noc_core_vr_noc2_rdy_f)
+        ,.val_i         (core_noc_vr_noc2_val_p)
+        ,.data_i        (core_noc_vr_noc2_data_p)
+        ,.rdy_i         (noc_core_vr_noc2_rdy)
+        ,.val_o         (core_noc_vr_noc2_val)
+        ,.data_o        (core_noc_vr_noc2_data)
+        );
+
+    // PRGA
+    wire                                    src_prga_vr_noc1_val, src_prga_vr_noc1_val_f;
+    wire [`NOC_DATA_WIDTH-1:0]              src_prga_vr_noc1_data, src_prga_vr_noc1_data_f;
+    wire                                    src_prga_vr_noc1_rdy, src_prga_vr_noc1_rdy_p;
+
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_src_prga_noc1 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (src_prga_vr_noc1_rdy)
+        ,.val_i         (src_prga_vr_noc1_val)
+        ,.data_i        (src_prga_vr_noc1_data)
+        ,.rdy_i         (src_prga_vr_noc1_rdy_p)
+        ,.val_o         (src_prga_vr_noc1_val_f)
+        ,.data_o        (src_prga_vr_noc1_data_f)
+        );
+
+    wire                                    prga_dst_vr_noc2_val, prga_dst_vr_noc2_val_p;
+    wire [`NOC_DATA_WIDTH-1:0]              prga_dst_vr_noc2_data, prga_dst_vr_noc2_data_p;
+    wire                                    prga_dst_vr_noc2_rdy, prga_dst_vr_noc2_rdy_f;
+
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_prga_dst_noc2 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (prga_dst_vr_noc2_rdy_f)
+        ,.val_i         (prga_dst_vr_noc2_val_p)
+        ,.data_i        (prga_dst_vr_noc2_data_p)
+        ,.rdy_i         (prga_dst_vr_noc2_rdy)
+        ,.val_o         (prga_dst_vr_noc2_val)
+        ,.data_o        (prga_dst_vr_noc2_data)
+        );
+
+`ifdef PITON_RVIC
+    // PLIC
+    wire                                    src_rvic_vr_noc1_val, src_rvic_vr_noc1_val_f;
+    wire [`NOC_DATA_WIDTH-1:0]              src_rvic_vr_noc1_dat, src_rvic_vr_noc1_dat_f;
+    wire                                    src_rvic_vr_noc1_rdy, src_rvic_vr_noc1_rdy_p;
+
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_src_rvic_noc1 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (src_rvic_vr_noc1_rdy)
+        ,.val_i         (src_rvic_vr_noc1_val)
+        ,.data_i        (src_rvic_vr_noc1_dat)
+        ,.rdy_i         (src_rvic_vr_noc1_rdy_p)
+        ,.val_o         (src_rvic_vr_noc1_val_f)
+        ,.data_o        (src_rvic_vr_noc1_dat_f)
+        );
+
+    wire                                    rvic_dst_vr_noc2_val, rvic_dst_vr_noc2_val_p;
+    wire [`NOC_DATA_WIDTH-1:0]              rvic_dst_vr_noc2_dat, rvic_dst_vr_noc2_dat_p;
+    wire                                    rvic_dst_vr_noc2_rdy, rvic_dst_vr_noc2_rdy_f;
+
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_rvic_dst_noc2 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (rvic_dst_vr_noc2_rdy_f)
+        ,.val_i         (rvic_dst_vr_noc2_val_p)
+        ,.data_i        (rvic_dst_vr_noc2_dat_p)
+        ,.rdy_i         (rvic_dst_vr_noc2_rdy)
+        ,.val_o         (rvic_dst_vr_noc2_val)
+        ,.data_o        (rvic_dst_vr_noc2_dat)
+        );
+
+    // CLINT
+    wire                                    src_clint_vr_noc1_val, src_clint_vr_noc1_val_f;
+    wire [`NOC_DATA_WIDTH-1:0]              src_clint_vr_noc1_dat, src_clint_vr_noc1_dat_f;
+    wire                                    src_clint_vr_noc1_rdy, src_clint_vr_noc1_rdy_p;
+
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_src_clint_noc1 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (src_clint_vr_noc1_rdy)
+        ,.val_i         (src_clint_vr_noc1_val)
+        ,.data_i        (src_clint_vr_noc1_dat)
+        ,.rdy_i         (src_clint_vr_noc1_rdy_p)
+        ,.val_o         (src_clint_vr_noc1_val_f)
+        ,.data_o        (src_clint_vr_noc1_dat_f)
+        );
+
+    wire                                    clint_dst_vr_noc2_val, clint_dst_vr_noc2_val_p;
+    wire [`NOC_DATA_WIDTH-1:0]              clint_dst_vr_noc2_dat, clint_dst_vr_noc2_dat_p;
+    wire                                    clint_dst_vr_noc2_rdy, clint_dst_vr_noc2_rdy_f;
+
+    prga_valrdy_buf #(
+        .REGISTERED     (1)
+        ,.DECOUPLED     (1)
+        ,.DATA_WIDTH    (`NOC_DATA_WIDTH)
+    ) i_buf_clint_dst_noc2 (
+        .clk            (clk)
+        ,.rst           (~rst_n)
+        ,.rdy_o         (clint_dst_vr_noc2_rdy_f)
+        ,.val_i         (clint_dst_vr_noc2_val_p)
+        ,.data_i        (clint_dst_vr_noc2_dat_p)
+        ,.rdy_i         (clint_dst_vr_noc2_rdy)
+        ,.val_o         (clint_dst_vr_noc2_val)
+        ,.data_o        (clint_dst_vr_noc2_dat)
+        );
+
+`endif /* `ifdef PITON_RVIC */
+
+    noc_fbits_splitter prga_ctrl_core_noc1_splitter (
+        .clk                            (clk),
+        .rst_n                          (rst_n),
+
+        .src_splitter_vr_noc_val        (noc_core_vr_noc1_val_f),
+        .src_splitter_vr_noc_dat        (noc_core_vr_noc1_data_f),
+        .src_splitter_vr_noc_rdy        (core_noc_vr_noc1_rdy_p),
+
+        .splitter_dst0_vr_noc_val       (src_prga_vr_noc1_val ),
+        .splitter_dst0_vr_noc_dat       (src_prga_vr_noc1_data),
+        .splitter_dst0_vr_noc_rdy       (src_prga_vr_noc1_rdy ),
+        .fbits_type0                    (`NOC_FBITS_PRGA),
+
+        .splitter_dst3_vr_noc_rdy       (1'b0),
+        .fbits_type3                    (4'd0),
+
+        .splitter_dst4_vr_noc_rdy       (1'b0),
+        .fbits_type4                    (4'd0),
+
+        `ifdef PITON_RVIC
+        .num_targets                    (3'd3),
+
+        .splitter_dst1_vr_noc_val       (src_rvic_vr_noc1_val),
+        .splitter_dst1_vr_noc_dat       (src_rvic_vr_noc1_dat),
+        .splitter_dst1_vr_noc_rdy       (src_rvic_vr_noc1_rdy),
+        .fbits_type1                    (`NOC_FBITS_PLIC),
+
+        .splitter_dst2_vr_noc_val       (src_clint_vr_noc1_val),
+        .splitter_dst2_vr_noc_dat       (src_clint_vr_noc1_dat),
+        .splitter_dst2_vr_noc_rdy       (src_clint_vr_noc1_rdy),
+        .fbits_type2                    (`NOC_FBITS_CLINT)
+        `else   /* `ifdef PITON_RVIC */
+        .num_targets                    (3'd1),
+
+        .splitter_dst1_vr_noc_rdy       (1'b0),
+        .fbits_type1                    (4'd0),
+
+        .splitter_dst2_vr_noc_rdy       (1'b0),
+        .fbits_type2                    (4'd0)
+        `endif  /* `ifdef PITON_RVIC */
+    );
+
+    noc_prio_merger prga_ctrl_core_noc2_merger (
+        .clk                            (clk),
+        .rst_n                          (rst_n),
+
+        .src0_merger_vr_noc_val         (prga_dst_vr_noc2_val ),
+        .src0_merger_vr_noc_dat         (prga_dst_vr_noc2_data),
+        .src0_merger_vr_noc_rdy         (prga_dst_vr_noc2_rdy ),
+
+        .src3_merger_vr_noc_val         (1'b0                   ),
+        .src3_merger_vr_noc_dat         ({`NOC_DATA_WIDTH{1'b0}}),
+
+        .src4_merger_vr_noc_val         (1'b0                   ),
+        .src4_merger_vr_noc_dat         ({`NOC_DATA_WIDTH{1'b0}}),
+
+        .merger_dst_vr_noc_val          (core_noc_vr_noc2_val_p),
+        .merger_dst_vr_noc_dat          (core_noc_vr_noc2_data_p),
+        .merger_dst_vr_noc_rdy          (noc_core_vr_noc2_rdy_f),
+
+        `ifdef PITON_RVIC
+        .num_sources                    (3'd3),
+
+        .src1_merger_vr_noc_val         (rvic_dst_vr_noc2_val ),
+        .src1_merger_vr_noc_dat         (rvic_dst_vr_noc2_dat ),
+        .src1_merger_vr_noc_rdy         (rvic_dst_vr_noc2_rdy ),
+
+        .src2_merger_vr_noc_val         (clint_dst_vr_noc2_val),
+        .src2_merger_vr_noc_dat         (clint_dst_vr_noc2_dat),
+        .src2_merger_vr_noc_rdy         (clint_dst_vr_noc2_rdy)
+        `else   /* `ifdef PITON_RVIC */
+        .num_sources                    (3'd1),
+
+        .src1_merger_vr_noc_val         (1'b0                   ),
+        .src1_merger_vr_noc_dat         ({`NOC_DATA_WIDTH{1'b0}}),
+
+        .src2_merger_vr_noc_val         (1'b0                   ),
+        .src2_merger_vr_noc_dat         ({`NOC_DATA_WIDTH{1'b0}})
+        `endif  /* `ifdef PITON_RVIC */
+    );
+
+    // =======================================================================
+    // == NoC to AXI4-Lite Transducer ========================================
+    // =======================================================================
+
+    wire creg_req_rdy, creg_req_val, creg_resp_rdy, creg_resp_val;
+    wire [`PRGA_CREG_ADDR_WIDTH-1:0] creg_req_addr;
+    wire [`PRGA_CREG_DATA_WIDTH-1:0] creg_req_data, creg_resp_data;
+    wire [`PRGA_CREG_DATA_BYTES-1:0] creg_req_strb;
+
+    wire ccm_req_rdy, ccm_req_val;
+    wire [`PRGA_CCM_REQTYPE_WIDTH-1:0]      ccm_req_type;
+    wire [`PRGA_CCM_ADDR_WIDTH-1:0]         ccm_req_addr;
+    wire [`PRGA_CCM_DATA_WIDTH-1:0]         ccm_req_data;
+    wire [`PRGA_CCM_SIZE_WIDTH-1:0]         ccm_req_size;
+    wire [`PRGA_CCM_THREADID_WIDTH-1:0]     ccm_req_threadid;
+    wire [`PRGA_CCM_AMO_OPCODE_WIDTH-1:0]   ccm_req_amo_opcode;
+
+    wire ccm_resp_rdy, ccm_resp_val;
+    wire [`PRGA_CCM_RESPTYPE_WIDTH-1:0]     ccm_resp_type;
+    wire [`PRGA_CCM_THREADID_WIDTH-1:0]     ccm_resp_threadid;
+    wire [`PRGA_CCM_CACHETAG_INDEX]         ccm_resp_addr;
+    wire [`PRGA_CCM_CACHELINE_WIDTH-1:0]    ccm_resp_data;
+
+    // use a register in PRGA tile to set the CLINT rtc
+    wire [63:0] rtc_countdown;
+
+    // noc axilite bridge wires
+    wire axi4lite_awvalid, axi4lite_awready, axi4lite_wvalid, axi4lite_wready, axi4lite_bvalid, axi4lite_bready;
+    wire axi4lite_arvalid, axi4lite_arready, axi4lite_rvalid, axi4lite_rready;
+    wire [`NOC_DATA_WIDTH-1:0] axi4lite_awaddr, axi4lite_araddr;
+    wire [`NOC_DATA_WIDTH-1:0] axi4lite_wdata, axi4lite_rdata;
+    wire [`NOC_DATA_WIDTH/8-1:0] axi4lite_wstrb;
+    wire [1:0] axi4lite_rresp, axi4lite_bresp;
+
+    noc_axilite_bridge #(
+        .SLAVE_RESP_BYTEWIDTH               (8)
+        ,.SWAP_ENDIANESS                    (1)
+    ) i_noc2axi4lite_prga (
+        .clk                                (clk)
+        ,.rst                               (~rst_n)
+
+        ,.splitter_bridge_val               (src_prga_vr_noc1_val_f)
+        ,.splitter_bridge_data              (src_prga_vr_noc1_data_f)
+        ,.bridge_splitter_rdy               (src_prga_vr_noc1_rdy_p)
+
+        ,.bridge_splitter_val               (prga_dst_vr_noc2_val_p)
+        ,.bridge_splitter_data              (prga_dst_vr_noc2_data_p)
+        ,.splitter_bridge_rdy               (prga_dst_vr_noc2_rdy_f)
+
+        ,.m_axi_awaddr		                (axi4lite_awaddr)
+        ,.m_axi_awvalid		                (axi4lite_awvalid)
+        ,.m_axi_awready		                (axi4lite_awready)
+
+        ,.m_axi_wdata		                (axi4lite_wdata)
+        ,.m_axi_wstrb		                (axi4lite_wstrb)
+        ,.m_axi_wvalid		                (axi4lite_wvalid)
+        ,.m_axi_wready		                (axi4lite_wready)
+
+        ,.m_axi_araddr		                (axi4lite_araddr)
+        ,.m_axi_arvalid		                (axi4lite_arvalid)
+        ,.m_axi_arready		                (axi4lite_arready)
+
+        ,.m_axi_rdata		                (axi4lite_rdata)
+        ,.m_axi_rresp		                (axi4lite_rresp)
+        ,.m_axi_rvalid		                (axi4lite_rvalid)
+        ,.m_axi_rready		                (axi4lite_rready)
+
+        ,.m_axi_bresp		                (axi4lite_bresp)
+        ,.m_axi_bvalid		                (axi4lite_bvalid)
+        ,.m_axi_bready		                (axi4lite_bready)
+
+        ,.w_reqbuf_size                     ()
+        ,.r_reqbuf_size                     ()
+    );
+
+    // =======================================================================
+    // == PRGA Ctrl ========================================
+    // =======================================================================
+
+    // AXI4Lite frontend
+    prga_fe_axi4lite i_fe_axi4lite (
+        .clk                                (clk)
+        ,.rst_n                             (rst_n)
+
+        // == AXI4Lite interface ==
+	,.m_AWADDR		                    (axi4lite_awaddr[0 +: `PRGA_CREG_ADDR_WIDTH])
+        ,.m_AWVALID		                    (axi4lite_awvalid)
+        ,.m_AWREADY		                    (axi4lite_awready)
+        ,.m_AWPROT                          (3'b0)
+
+        ,.m_WDATA		                    (axi4lite_wdata)
+        ,.m_WSTRB		                    (axi4lite_wstrb)
+        ,.m_WVALID		                    (axi4lite_wvalid)
+        ,.m_WREADY		                    (axi4lite_wready)
+
+        ,.m_ARADDR		                    (axi4lite_araddr[0 +: `PRGA_CREG_ADDR_WIDTH])
+        ,.m_ARVALID		                    (axi4lite_arvalid)
+        ,.m_ARREADY		                    (axi4lite_arready)
+        ,.m_ARPROT                          (3'b0)
+
+        ,.m_RDATA		                    (axi4lite_rdata)
+        ,.m_RRESP		                    (axi4lite_rresp)
+        ,.m_RVALID		                    (axi4lite_rvalid)
+        ,.m_RREADY		                    (axi4lite_rready)
+
+        ,.m_BRESP		                    (axi4lite_bresp)
+        ,.m_BVALID		                    (axi4lite_bvalid)
+        ,.m_BREADY		                    (axi4lite_bready)
+
+        ,.creg_req_rdy                      (creg_req_rdy)
+        ,.creg_req_val                      (creg_req_val)
+        ,.creg_req_addr                     (creg_req_addr)
+        ,.creg_req_strb                     (creg_req_strb)
+        ,.creg_req_data                     (creg_req_data)
+
+        ,.creg_resp_rdy                     (creg_resp_rdy)
+        ,.creg_resp_val                     (creg_resp_val)
+        ,.creg_resp_data                    (creg_resp_data)
+        );
+
+    prga_l15_transducer i_transducer (
+        .clk                                    (clk)
+        ,.rst_n                                 (rst_n)
+
+        ,.transducer_l15_rqtype                 (transducer_l15_rqtype)
+        ,.transducer_l15_amo_op                 (transducer_l15_amo_op)
+        ,.transducer_l15_nc                     (transducer_l15_nc)
+        ,.transducer_l15_size                   (transducer_l15_size)
+        ,.transducer_l15_threadid               (transducer_l15_threadid)
+        ,.transducer_l15_prefetch               (transducer_l15_prefetch)
+        ,.transducer_l15_blockstore             (transducer_l15_blockstore)
+        ,.transducer_l15_blockinitstore         (transducer_l15_blockinitstore)
+        ,.transducer_l15_l1rplway               (transducer_l15_l1rplway)
+        ,.transducer_l15_val                    (transducer_l15_val)
+        ,.transducer_l15_invalidate_cacheline   (transducer_l15_invalidate_cacheline)
+        ,.transducer_l15_address                (transducer_l15_address)
+        ,.transducer_l15_csm_data               (transducer_l15_csm_data)
+        ,.transducer_l15_data                   (transducer_l15_data)
+        ,.transducer_l15_data_next_entry        (transducer_l15_data_next_entry)
+
+        ,.l15_transducer_ack                    (l15_transducer_ack)
+        ,.l15_transducer_header_ack             (l15_transducer_header_ack)
+
+        ,.l15_transducer_val                    (l15_transducer_val)
+        ,.l15_transducer_returntype             (l15_transducer_returntype)
+        ,.l15_transducer_threadid               (l15_transducer_threadid)
+        ,.l15_transducer_data_0                 (l15_transducer_data_0)
+        ,.l15_transducer_data_1                 (l15_transducer_data_1)
+        ,.l15_transducer_inval_address_15_4     (l15_transducer_inval_address_15_4)
+        ,.l15_transducer_noncacheable           (l15_transducer_noncacheable)
+
+        ,.transducer_l15_req_ack                (transducer_l15_req_ack)
+
+        ,.ccm_req_rdy					        (ccm_req_rdy)
+        ,.ccm_req_val					        (ccm_req_val)
+        ,.ccm_req_type					        (ccm_req_type)
+        ,.ccm_req_addr					        (ccm_req_addr)
+        ,.ccm_req_data					        (ccm_req_data)
+        ,.ccm_req_size					        (ccm_req_size)
+        ,.ccm_req_threadid					    (ccm_req_threadid)
+        ,.ccm_req_amo_opcode					(ccm_req_amo_opcode)
+
+        ,.ccm_resp_rdy					        (ccm_resp_rdy)
+        ,.ccm_resp_val					        (ccm_resp_val)
+        ,.ccm_resp_type					        (ccm_resp_type)
+        ,.ccm_resp_threadid					    (ccm_resp_threadid)
+        ,.ccm_resp_addr					        (ccm_resp_addr)
+        ,.ccm_resp_data					        (ccm_resp_data)
+        );
+
+    prga_sysintf i_sysintf (
+        .clk                                    (clk)
+        ,.rst_n                                 (rst_n)
+
+        ,.reg_req_rdy                           (creg_req_rdy)
+        ,.reg_req_val                           (creg_req_val)
+        ,.reg_req_addr                          (creg_req_addr)
+        ,.reg_req_strb                          (creg_req_strb)
+        ,.reg_req_data                          (creg_req_data)
+        ,.reg_resp_rdy                          (creg_resp_rdy)
+        ,.reg_resp_val                          (creg_resp_val)
+        ,.reg_resp_data                         (creg_resp_data)
+
+        ,.ccm_req_rdy					        (ccm_req_rdy)
+        ,.ccm_req_val					        (ccm_req_val)
+        ,.ccm_req_type					        (ccm_req_type)
+        ,.ccm_req_addr					        (ccm_req_addr)
+        ,.ccm_req_data					        (ccm_req_data)
+        ,.ccm_req_size					        (ccm_req_size)
+        ,.ccm_req_threadid					    (ccm_req_threadid)
+        ,.ccm_req_amo_opcode					(ccm_req_amo_opcode)
+        ,.ccm_resp_rdy					        (ccm_resp_rdy)
+        ,.ccm_resp_val					        (ccm_resp_val)
+        ,.ccm_resp_type					        (ccm_resp_type)
+        ,.ccm_resp_threadid					    (ccm_resp_threadid)
+        ,.ccm_resp_addr					        (ccm_resp_addr)
+        ,.ccm_resp_data					        (ccm_resp_data)
+
+        ,.prog_rst_n                            (prog_rst_n)
+        ,.prog_status                           (prog_status)
+        ,.prog_req_rdy                          (prog_req_rdy)
+        ,.prog_req_val                          (prog_req_val)
+        ,.prog_req_addr                         (prog_req_addr)
+        ,.prog_req_strb                         (prog_req_strb)
+        ,.prog_req_data                         (prog_req_data)
+        ,.prog_resp_rdy                         (prog_resp_rdy)
+        ,.prog_resp_val                         (prog_resp_val)
+        ,.prog_resp_err                         (prog_resp_err)
+        ,.prog_resp_data                        (prog_resp_data)
+
+        ,.aclk                                  (aclk)
+        ,.arst_n                                (arst_n)
+
+        ,.urst_n                                (urst_n)
+        ,.ureg_req_rdy                          (ureg_req_rdy)
+        ,.ureg_req_val                          (ureg_req_val)
+        ,.ureg_req_addr                         (ureg_req_addr)
+        ,.ureg_req_strb                         (ureg_req_strb)
+        ,.ureg_req_data                         (ureg_req_data)
+        ,.ureg_resp_rdy                         (ureg_resp_rdy)
+        ,.ureg_resp_val                         (ureg_resp_val)
+        ,.ureg_resp_data                        (ureg_resp_data)
+        ,.ureg_resp_ecc                         (ureg_resp_ecc)
+
+        ,.awready						        (awready)
+        ,.awvalid						        (awvalid)
+        ,.awid						            (awid)
+        ,.awaddr						        (awaddr)
+        ,.awlen						            (awlen)
+        ,.awsize						        (awsize)
+        ,.awburst						        (awburst)
+        ,.awcache						        (awcache)
+        ,.awuser						        (awuser)
+        ,.wready						        (wready)
+        ,.wvalid						        (wvalid)
+        ,.wdata						            (wdata)
+        ,.wstrb						            (wstrb)
+        ,.wlast						            (wlast)
+        ,.wuser						            (wuser)
+        ,.bready						        (bready)
+        ,.bvalid						        (bvalid)
+        ,.bresp						            (bresp)
+        ,.bid						            (bid)
+        ,.arready						        (arready)
+        ,.arvalid						        (arvalid)
+        ,.arid						            (arid)
+        ,.araddr						        (araddr)
+        ,.arlen						            (arlen)
+        ,.arsize						        (arsize)
+        ,.arburst						        (arburst)
+        ,.arlock						        (arlock)
+        ,.arcache						        (arcache)
+        ,.aruser						        (aruser)
+        ,.rready						        (rready)
+        ,.rvalid						        (rvalid)
+        ,.rresp						            (rresp)
+        ,.rid						            (rid)
+        ,.rdata						            (rdata)
+        ,.rlast						            (rlast)
+
+        ,.rtc_countdown                         (rtc_countdown)
+        );
+
+    // =======================================================================
+    // == PITON RVIC =========================================================
+    // =======================================================================
+
+`ifdef PITON_RVIC
+    // Didvide the clk by PRGA reg value, use this as rtc
+    // rtc will never be used as a clock signal to trigger an 'always'
+    reg         rtc;
+    reg [63:0]  rtc_count;
+    always @(posedge clk) begin
+        if (!rst_n) begin
+	    rtc <= 1'b0;
+	    rtc_count <= 64'b0;
+	end
+	else begin
+	    rtc_count <= (rtc_count < rtc_countdown) ? (rtc_count + 64'b1) : 64'b0;
+	    rtc       <= (rtc_count < rtc_countdown) ? rtc : ~rtc;
+	end
+    end
+
+    pmesh_rvic #(
+    `ifdef PITON_FPGA_SYNTH
+        .NUM_SOURCES                    ( 2               ),
+    `else
+        .NUM_SOURCES                    ( 128             ), // TODO: double check this is correct
+    `endif
+        .NUM_HARTS                      ( `PITON_RV64_TILES ),
+        .MAX_PRIORITY                   ( 7               ),
+        .CLINT_BASE                     ( 64'he103c00000  ),
+        .PLIC_BASE                      ( 64'he200000000  )
+    ) pmesh_rvic (
+        .clk                        ( clk                       ),
+        .rst_n                      ( rst_n                     ),
+
+        // Interrupts are snooped from TRI responses
+        .l15_transducer_val         ( l15_transducer_val        ),
+        .l15_transducer_returntype  ( l15_transducer_returntype ),
+        .l15_transducer_data_0      ( l15_transducer_data_0     ),
+
+        // input from noc1 (load/store to RVIC)
+        .src_rvic_vr_noc1_val       ( src_rvic_vr_noc1_val_f    ),
+        .src_rvic_vr_noc1_dat       ( src_rvic_vr_noc1_dat_f    ),
+        .src_rvic_vr_noc1_rdy       ( src_rvic_vr_noc1_rdy_p    ),
+
+        // output to noc2 (load/store response)
+        .rvic_dst_vr_noc2_val       ( rvic_dst_vr_noc2_val_p    ),
+        .rvic_dst_vr_noc2_dat       ( rvic_dst_vr_noc2_dat_p    ),
+        .rvic_dst_vr_noc2_rdy       ( rvic_dst_vr_noc2_rdy_f    ),
+
+        // Interrupt targets go to core
+        .irq_targets                ( irq_o                     ),
+
+        // CLINT
+        .src_clint_noc1_val         ( src_clint_vr_noc1_val_f   ),
+        .src_clint_noc1_dat         ( src_clint_vr_noc1_dat_f   ),
+        .src_clint_noc1_rdy         ( src_clint_vr_noc1_rdy_p   ),
+
+        .clint_dst_noc2_val         ( clint_dst_vr_noc2_val_p   ),
+        .clint_dst_noc2_dat         ( clint_dst_vr_noc2_dat_p   ),
+        .clint_dst_noc2_rdy         ( clint_dst_vr_noc2_rdy_f   ),
+
+        .rtc_i                      ( rtc                     ),
+        .timer_irq_o                ( timer_irq_o             ),
+        .ipi_o                      ( ipi_o                   )
+    );
+`else   /* `ifdef PITON_RVIC */
+    // assign src_rvic_vr_noc1_rdy  = 1'b0;
+    // assign rvic_dst_vr_noc2_val  = 1'b0;
+    // assign rvic_dst_vr_noc2_dat  = {`NOC_DATA_WIDTH{1'b0}};
+    assign irq_o                 = {(`PITON_RV64_TILES*2){1'b0}};
+    // assign src_clint_vr_noc1_rdy = 1'b0;
+    // assign clint_dst_vr_noc2_val = 1'b0;
+    // assign clint_dst_vr_noc2_dat = {`NOC_DATA_WIDTH{1'b0}};
+    assign timer_irq_o           = {`PITON_RV64_TILES{1'b0}};
+    assign ipi_o                 = {`PITON_RV64_TILES{1'b0}};
+`endif  /* `ifdef PITON_RVIC */
+
+endmodule
