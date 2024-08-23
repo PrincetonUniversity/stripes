@@ -1,0 +1,139 @@
+// Copyright (c) 2024 Princeton University
+// All rights reserved.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+//============================================================================
+// Paramaterizable bit-width ALU containing add/sub, logical, shifter. (mul?)
+//============================================================================
+
+`ifndef NIBBLER_CORE_DPATH_ALU_V
+`define NIBBLER_CORE_DPATH_ALU_V
+
+<%
+from pyhplib import *
+%>
+//-------------------------------------------------------------------------
+// Main alu
+//-------------------------------------------------------------------------
+
+module  nibbler_CoreDpathAlu
+
+(
+<%
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0] in_a,')
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0] in_b,')
+%>
+  input               in_c,
+  input               addsub_fn,           // 0=add, 1=sub
+  input [1:0]         logic_fn,            // XOR=00, OR=10, AND=11 (bits [14:13] of IR), A!B=01 (used for csrrc)
+
+`ifdef NIBBLER_VECTOR_SHIFT
+  input               shift_dir,           // 0=left, 1=right
+  input               signed_off_msb,
+  input               bitwise_subword_sel, // 0=bitwise, 1=subword-wise shift 
+<%  
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0]      in_adj_subword,')
+if NIBBLER_P_NBITS == 1:
+  print("      input bitwise_shamt, // dummy for bit-serial")
+else:
+  print("      input ["+str(NIBBLER_C_LOG_NBITS-1)+":0] bitwise_shamt,")
+
+print('  output ['+str(NIBBLER_P_NBITS-1)+':0] shift_out,')
+%>
+`endif
+
+<%
+print('  output ['+str(NIBBLER_P_NBITS-1)+':0]     sum_out,')
+%>
+  output                   carry_out,
+  output                   a_b_not_eq,
+<%
+print('  output reg ['+str(NIBBLER_P_NBITS-1)+':0] fn_out')
+%>
+
+);
+
+<%
+print('  localparam NIBBLER_P_NBITS = '+str(NIBBLER_P_NBITS) + ';')
+%>
+
+// Add/Sub unit
+wire [NIBBLER_P_NBITS-1:0] b_mux_out = addsub_fn ? ~in_b : in_b;
+assign {carry_out, sum_out} = in_a + b_mux_out + in_c;
+
+// Logical Unit
+localparam FN_XOR   = 2'b00;
+localparam FN_AND   = 2'b11;
+localparam FN_OR    = 2'b10;
+localparam FN_A_NB  = 2'b01;
+localparam FN_SHIFT = 2'b11;
+
+wire [NIBBLER_P_NBITS-1:0] xor_out = in_a ^ in_b;
+wire [NIBBLER_P_NBITS-1:0] and_out = in_a & in_b;
+wire [NIBBLER_P_NBITS-1:0] or_out  = in_a | in_b;
+wire [NIBBLER_P_NBITS-1:0] a_nb_out  = in_a & ~in_b;
+
+always @(*) begin
+  case (logic_fn)
+    FN_XOR:  fn_out = xor_out;
+    FN_AND:  fn_out = and_out;
+    FN_OR:   fn_out = or_out;
+    FN_A_NB: fn_out = a_nb_out;
+    default: fn_out = and_out;
+  endcase
+end
+
+assign a_b_not_eq = |xor_out;
+
+`ifdef NIBBLER_VECTOR_SHIFT 
+// Subword-wise Shifter Unit
+//---------------------------
+// Adjacent subword will be pre-set in microcode to 0 or MSB(in) based on sign of sw_offset. 
+wire [NIBBLER_P_NBITS-1:0] subword_shift_out = signed_off_msb ? in_adj_subword : in_a;
+
+// Bitwise Shifter Unit
+//----------------------
+// The microcode ensures all subword-level 
+// translation preserves sign extension when necessary.
+//   Thus, the only subword where we care about 
+//   sign extension is the very first one on SRA only.
+// Microcode will initializes in_adj_subword to 0 or SEXT(MSB)
+//   on all right shifts anyway.
+//   Thus, we do not need to differentiate between
+//   arithmetic and logical shifts.
+
+// For right shifts, we go from MSSW to LSSW
+wire [(2*NIBBLER_P_NBITS)-1:0] concat_subwords = shift_dir ? {in_adj_subword, in_a} : {in_a, in_adj_subword};
+wire [(2*NIBBLER_P_NBITS)-1:0] left_shift_result = concat_subwords << bitwise_shamt;
+wire [(2*NIBBLER_P_NBITS)-1:0] right_shift_result = concat_subwords >> bitwise_shamt;
+
+// Choose MSBits for SLL and LSBits for Right Shifts
+wire [NIBBLER_P_NBITS-1:0] bitwise_shift_out = (shift_dir) ? right_shift_result[NIBBLER_P_NBITS-1:0]
+                                                           : left_shift_result[2*NIBBLER_P_NBITS-1:NIBBLER_P_NBITS];
+
+assign shift_out = bitwise_subword_sel ? subword_shift_out : bitwise_shift_out;
+`endif
+
+endmodule
+
+`endif

@@ -64,9 +64,11 @@ module rtap_ucb_transmitter(
 // no back pressure from the core for now
 // upon valid from any core, packet is copied into a single buffer in CTAP
 // 1. stall_a1 is intentionally set to 1'b0
+wire [`UCB_BUS_WIDTH-1:0] ucb_out_data_pre;
+assign ucb_out_data = ucb_out_data_pre & {`UCB_BUS_WIDTH{ucb_out_val}};
 ucb_bus_out #(`UCB_BUS_WIDTH, `CTAP_UCB_PACKET_WIDTH-64) ucb_out(
     .vld(ucb_out_val),
-    .data(ucb_out_data),
+    .data(ucb_out_data_pre),
     .outdata_buf_busy(),
     .clk(clk),
     .rst_l(rst_n),

@@ -477,6 +477,7 @@ def run_item (dryrun, contint_dir, item) :
         else:
             fp.write("#SBATCH -t 3:00:00               # walltime=1hr6mins\n")
 
+        fp.write("#SBATCH --licenses=VCS               # licenses=VCS\n")
         fp.write("#SBATCH -J contint_" + item.name + "   # jobname\n\n")
         fp.write(item.run_command)
         fp.close()

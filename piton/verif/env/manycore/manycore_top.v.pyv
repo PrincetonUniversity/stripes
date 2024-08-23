@@ -114,10 +114,14 @@ reg                             fail_flag;
 ////////////////////
 
 `ifndef VERILATOR
+`ifdef PITON_PLL_BSG_CLK_GEN
+always #5000 core_ref_clk = ~core_ref_clk;                      // 100MHz
+`else
 `ifndef USE_FAKE_PLL_AND_CLKMUX
 always #5000 core_ref_clk = ~core_ref_clk;                      // 100MHz
 `else
 always #500 core_ref_clk = ~core_ref_clk;                       // 1000MHz
+`endif
 `endif
 `endif
 
@@ -153,6 +157,23 @@ always #25000 spi_sys_clk = ~spi_sys_clk;                       // 20MHz
 ////////////////////////////////////////////////////////
 
 `ifndef VERILATOR
+
+`ifdef PITON_PLL_BSG_CLK_GEN
+reg bsg_clk_gen_status;
+reg [4:0] bsg_clk_gen_tap;
+reg [8:0] bsg_clk_gen_ds;
+wire bsg_clk_gen_finished;
+bsg_clk_gen_starter i_clk_starter (
+    .clk_tag_clk_o      (pll_rangea[2]),
+    .clk_tag_en_o       (pll_rangea[3]),
+    .clk_tag_data_o     (pll_rangea[4]),
+
+    .starter_tap        (bsg_clk_gen_tap),
+    .starter_ds         (bsg_clk_gen_ds),
+    .starter_finished_o (bsg_clk_gen_finished)
+);
+`endif
+
 initial
 begin
     // These are not referenced elsewhere in this module,
@@ -184,6 +205,7 @@ begin
 
     // Mostly DC signals set at start of boot
     clk_en = 1'b0;
+`ifndef PITON_PLL_BSG_CLK_GEN
     if ($test$plusargs("pll_en"))
     begin
         // PLL is disabled by default
@@ -199,6 +221,22 @@ begin
     pll_rangea = 5'b00001; // 10x ref clock
     // pll_rangea = 5'b11110; // 5x ref clock
     // pll_rangea = 5'b00000; // 20x ref clock
+`else
+    bsg_clk_gen_status = $value$plusargs("bsg_clk_gen_tap=%d", bsg_clk_gen_tap);
+    bsg_clk_gen_status = $value$plusargs("bsg_clk_gen_ds=%d", bsg_clk_gen_ds);
+    if ($test$plusargs("pll_en"))
+    begin
+        if (bsg_clk_gen_ds == 1) begin
+            clk_mux_sel[1:0] = 2'b00; // selecting bsg_clk_gen osc
+        end else begin
+            clk_mux_sel[1:0] = 2'b01; // selecting bsg_clk_gen osc + ds
+        end
+    end
+    else
+    begin
+        clk_mux_sel[1:0] = 2'b10; // selecting ref clock
+    end
+`endif
 
     // JTAG simulation currently not supported here
     jtag_modesel = 1'b1;
@@ -232,12 +270,17 @@ begin
     end
 
 
+`ifndef PITON_PLL_BSG_CLK_GEN
     // Reset PLL for 100 cycles
     repeat(100)@(posedge core_ref_clk);
     pll_rst_n = 1'b1;
 
     // Wait for PLL lock
     wait( pll_lock == 1'b1 );
+`else
+    // Wait for bsg_clk_gen starter
+    wait( bsg_clk_gen_finished == 1'b1 );
+`endif
 
     // After 10 cycles turn on chip-level clock enable
     repeat(10)@(posedge `CHIP_INT_CLK);
@@ -429,6 +472,12 @@ system system(
         .rst_l     (`CHIP.rst_n_inter_sync)
         );
 
+    //DCP MONITORS
+    dcp_mon dcp_mon(
+        .clk   (`CHIP_INT_CLK),
+        .rst_l (`CHIP.rst_n_inter_sync)
+    );
+        
 `ifndef MINIMAL_MONITORING
     integer j;
 
@@ -511,10 +560,6 @@ system system(
     //async_fifo_mon async_fifo_mon(
     //   .clk (core_ref_clk)
     //);
-
-    jtag_mon jtag_mon(
-        .clk (jtag_clk)
-        );
 
     iob_mon iob_mon(
         .clk (chipset_clk)

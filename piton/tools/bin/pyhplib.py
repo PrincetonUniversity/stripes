@@ -24,8 +24,30 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import os
+import sys
 import math
 import xml.etree.ElementTree as ET
+
+###########
+# Nibbler #
+###########
+# Add param defines to path
+
+if (int(os.environ.get('PITON_NIBBLER','0')) != 0) or (int(os.environ.get('DECADES_DECOUPLING','0')) != 0):
+    NIBBLER_P_NLANES        = 64
+    NIBBLER_P_NBITS         = 8                                  #// Bit width of datapath
+    NIBBLER_C_LOG_NBITS     = int( math.log(NIBBLER_P_NBITS,2) ) #// # of bits needed to index into subword
+    NIBBLER_C_LOG_NBITS_STR = str(NIBBLER_C_LOG_NBITS)
+    NIBBLER_C_N_OFF         = int(32/NIBBLER_P_NBITS)            #// Number of total n-bit chunks per word.
+    NIBBLER_C_OFFBITS       = int( math.log(NIBBLER_C_N_OFF,2) ) #// # of bits needed to index the n-bit chunks.
+    NIBBLER_C_OFFBITS_STR   = str(NIBBLER_C_OFFBITS)
+    NIBBLER_N_CTRL_SIGNALS  = 58
+    sys.path.append(os.path.join(os.environ.get('DV_ROOT', '/'),"design/chip/tile/is/nibbler/py"))
+    import nibbler_microcode as mc
+
+###########
+# Nibbler #
+###########
 
 #MAX_THREAD = 128;
 MAX_TILE = 64;
@@ -40,6 +62,7 @@ PITON_Y_TILES = int(os.environ.get('PITON_Y_TILES', '-1'))
 
 PITON_NUM_TILES = int(os.environ.get('PITON_NUM_TILES', '-1'))
 #print "//num_tiles:", num_tiles
+PITON_RV64_TILES = int(os.environ.get('PITON_RV64_TILES', '-1'))
 
 PITON_NETWORK_CONFIG = (os.environ.get("PITON_NETWORK_CONFIG", "2dmesh_config"))
 
@@ -58,13 +81,23 @@ if PITON_NUM_TILES == -1:
     else:
         PITON_NUM_TILES = MAX_TILE
 
-PITON_OST1     = int(os.environ.get('PITON_OST1', '0'))
-PITON_ARIANE   = int(os.environ.get('PITON_ARIANE', '0'))
-PITON_PICO     = int(os.environ.get('PITON_PICO', '0'))
-PITON_PICO_HET = int(os.environ.get('PITON_PICO_HET', '0'))
+PITON_OST1       = int(os.environ.get('PITON_OST1', '0'))
+PITON_ARIANE     = int(os.environ.get('PITON_ARIANE', '0'))
+PITON_PICO       = int(os.environ.get('PITON_PICO', '0'))
+PITON_PICO_HET   = int(os.environ.get('PITON_PICO_HET', '0'))
 PITON_RV64_PLATFORM   = int(os.environ.get('PITON_RV64_PLATFORM', '0'))
+PITON_NIBBLER  = int(os.environ.get('PITON_NIBBLER', '0'))
+DECADES_DECOUPLING  = int(os.environ.get('DECADES_DECOUPLING', '0'))
+DECADES_CHIP = int(os.environ.get('DECADES_CHIP', '0'))
+PITON_PRGA     = int(os.environ.get('PITON_PRGA', '0'))
+PRGA_CTRL_X_TILE = int(os.environ.get('PRGA_CTRL_X_TILE', '0'))
+PRGA_CTRL_Y_TILE = int(os.environ.get('PRGA_CTRL_Y_TILE', '0'))
+PITON_RVIC     = int(os.environ.get('PITON_RVIC', '0'))
+PITON_PRGA_MOCK_APP = str(os.environ.get('PITON_PRGA_MOCK_APP', ""))
 
-if PITON_ARIANE or PITON_PICO:
+if DECADES_DECOUPLING or DECADES_CHIP:
+    NUM_THREADS = PITON_RV64_TILES
+elif PITON_ARIANE or PITON_PICO or PITON_NIBBLER:
     NUM_THREADS = PITON_NUM_TILES
 else:
     NUM_THREADS = 2 * PITON_NUM_TILES

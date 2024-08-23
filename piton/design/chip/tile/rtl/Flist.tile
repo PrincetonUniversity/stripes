@@ -30,3 +30,4 @@ cpx_arbitrator.v
 tile.v
 ccx_l15_transducer.v
 pico_l15_transducer.v
+nibbler_l15_transducer.v

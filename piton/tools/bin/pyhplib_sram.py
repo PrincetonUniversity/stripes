@@ -23,23 +23,6 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# def MakeGenericCacheDefine(modulename, type, height_define, heightlog2_define, width_define):
-#    if type == "1rw":
-#       t = Get1RWTemplate()
-#    elif type == "1r1w":
-#       # t = Get1R1WTemplate()
-#       assert(0)
-#    elif type == "2rw":
-#       t = Get2RWTemplate()
-#    else:
-#       assert(0)
-
-#    t = t.replace("_PARAMS_HEIGHT_LOG", heightlog2_define)
-#    t = t.replace("_PARAMS_HEIGHT", height_define)
-#    t = t.replace("_PARAMS_WIDTH", width_define)
-#    t = t.replace("_PARAMS_NAME", str(modulename))
-#    print(t)
-
 def MakeGenericCacheHeader(modulename, type, height_define, heightlog2_define, width_define):
    if type == "1rw":
       t = Get1RWHeader()
@@ -47,6 +30,8 @@ def MakeGenericCacheHeader(modulename, type, height_define, heightlog2_define, w
       t = Get1R1WHeader()
    elif type == "2rw":
       t = Get2RWHeader()
+   elif type == "2r1w":
+      t = Get2R1WHeader()
    else:
       assert(0)
 
@@ -79,6 +64,8 @@ def MakeGenericCache(modulename, type, height_define, heightlog2_define, width_d
       t = Get2RWCache()
    elif type == "2rw":
       t = Get2RWCache()
+   elif type == "2r1w":
+      t = Get2R1WCache()
    else:
       assert(0)
 
@@ -100,12 +87,12 @@ bram_1rw_wrapper #(
    .DATA_WIDTH    (%s)
 )   %s (
    .MEMCLK        (MEMCLK     ),
-   .RESET_N        (RESET_N     ),
-   .CE            (CE         ),
-   .A             (A          ),
-   .RDWEN         (RDWEN      ),
-   .BW            (BW         ),
-   .DIN           (DIN        ),
+   .RESET_N       (RESET_N     ),
+   .CE            (CE_mux         ),
+   .A             (A_mux          ),
+   .RDWEN         (RDWEN_mux      ),
+   .BW            (BW_mux         ),
+   .DIN           (DIN_mux        ),
    .DOUT          (DOUT_bram       )
 );
       ''' % (height_define, heightlog2_define, width_define, width_define, modulename)
@@ -120,34 +107,46 @@ bram_1r1w_wrapper #(
    .DATA_WIDTH    (%s)
 )   %s (
    .MEMCLK        (MEMCLK     ),
-   .RESET_N        (RESET_N     ),
-   .CEA        (CEA     ),
-   .AA        (AA     ),
-   .AB        (AB     ),
-   .RDWENA        (RDWENA     ),
-   .CEB        (CEB     ),
-   .RDWENB        (RDWENB     ),
-   .BWA        (BWA     ),
-   .DINA        (DINA     ),
-   .DOUTA        (DOUTA_bram     ),
-   .BWB        (BWB     ),
-   .DINB        (DINB     ),
-   .DOUTB        (DOUTB_bram     )
+   .RESET_N       (RESET_N     ),
+   .CEA           (CEA_mux     ),
+   .AA            (AA_mux     ),
+   .AB            (AB_mux     ),
+   .RDWENA        (RDWENA_mux     ),
+   .CEB           (CEB_mux     ),
+   .RDWENB        (RDWENB_mux     ),
+   .BWA           (BWA_mux     ),
+   .DINA          (DINA        ),
+   .DOUTA         (DOUTA_bram     ),
+   .BWB           (BWB_mux     ),
+   .DINB          (DINB_mux     ),
+   .DOUTB         (DOUTB_bram     )
 );
       ''' % (height_define, heightlog2_define, width_define, width_define, modulename)
 
    elif type == "2rw":
       assert(0) # unimplemented
 
+   elif type == "2r1w":
+      t='''
+      // WARNING: BRAMs not implemented for 2R1W
+      assign DOUTA_bram=%s'b1;
+      assign DOUTB_bram=%s'b0;''' %(width_define, width_define) #assert(0) # unimplemented
+
    print(t)
 
 def MakeGenericCacheDefine(modulename, type, height_define, heightlog2_define, width_define):
   MakeGenericCacheHeader(modulename, type, height_define, heightlog2_define, width_define)
+  print("localparam RAM_SIZE = %s;" % width_define)
+  print("localparam RAM_ADDR = %s;" % heightlog2_define)
   print("`ifdef SYNTHESIZABLE_BRAM")
   if type == "1rw":
      print("wire [%s-1:0] DOUT_bram;" % width_define)
      print("assign DOUT = DOUT_bram;")
+     print(makeMux())
+
   else:
+     if type != "2r1w":
+       print(makeMux1r1w())
      print("wire [%s-1:0] DOUTA_bram;" % width_define)
      print("wire [%s-1:0] DOUTB_bram;" % width_define)
      print("assign DOUTA = DOUTA_bram;")
@@ -155,7 +154,8 @@ def MakeGenericCacheDefine(modulename, type, height_define, heightlog2_define, w
   MakeSynthesizableBram(modulename, type, height_define, heightlog2_define, width_define)
   print("`else")
   MakeGenericCache(modulename, type, height_define, heightlog2_define, width_define)
-  print("`endif \n\n endmodule")
+  print("`endif\n")
+  print("endmodule\n")
 
 # def MakeGenericCacheDefine(modulename, type, height_define, heightlog2_define, width_define):
 #   MakeGenericCacheHeader(modulename, type, height_define, heightlog2_define, width_define)
@@ -193,56 +193,27 @@ def MakeGenericCacheDefine(modulename, type, height_define, heightlog2_define, w
 #       ''' % modulename)
 #   print("endmodule")
 
-def Get1RWTemplate():
-  return '''
-`include "define.tmp.h"
-`ifdef DEFAULT_NETTYPE_NONE
-`default_nettype none
-`endif
-module _PARAMS_NAME
-(
-input wire MEMCLK,
-input wire RESET_N,
-input wire CE,
-input wire [_PARAMS_HEIGHT_LOG-1:0] A,
-input wire RDWEN,
-input wire [_PARAMS_WIDTH-1:0] BW,
-input wire [_PARAMS_WIDTH-1:0] DIN,
-output wire [_PARAMS_WIDTH-1:0] DOUT,
-input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
-input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
-output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
-input wire [`BIST_ID_WIDTH-1:0] SRAMID
-);
-reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
+def makeMux():
+   return '''
+   wire CE_mux = 1'b0 || CE;
+   wire [RAM_ADDR-1:0] A_mux = CE ? A : 0;
+   wire RDWEN_mux = CE ? RDWEN : 0;
+   wire [RAM_SIZE-1:0] BW_mux = CE ? BW : 0;
+   wire [RAM_SIZE-1:0] DIN_mux = CE ? DIN : 0;
+'''
 
-integer i;
-initial
-begin
-   for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
-   begin
-      cache[i] = 0;
-   end
-end
-
-
-
-   reg [_PARAMS_WIDTH-1:0] dout_f;
-
-   assign DOUT = dout_f;
-
-   always @ (posedge MEMCLK)
-   begin
-      if (CE)
-      begin
-         if (RDWEN == 1'b0)
-            cache[A] <= (DIN & BW) | (cache[A] & ~BW);
-         else
-            dout_f <= cache[A];
-      end
-   end
-
-endmodule
+def makeMux1r1w():
+   return '''
+   wire CEA_mux = (1'b0 && 0) || CEA;
+   wire CEB_mux = (1'b0 && !0) || CEB;
+   wire [RAM_ADDR-1:0] AA_mux = CEA ? AA : 0;
+   wire [RAM_ADDR-1:0] AB_mux = CEB ? AB : 0;
+   wire RDWENA_mux = CEA ? RDWENA : 0;
+   wire RDWENB_mux = CEB ? RDWENB : 0;
+   wire [RAM_SIZE-1:0] BWA_mux = CEA ? BWA : 0;
+   wire [RAM_SIZE-1:0] BWB_mux = CEB ? BWB : 0;
+   wire [RAM_SIZE-1:0] DINB_mux = CEB ? DINB : 0;
+   wire [RAM_SIZE-1:0] DOUT = DOUTA;
 '''
 
 def Get1RWHeader():
@@ -263,7 +234,7 @@ input wire [_PARAMS_WIDTH-1:0] DIN,
 output wire [_PARAMS_WIDTH-1:0] DOUT,
 input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
 input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
-output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
+output wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
 input wire [`BIST_ID_WIDTH-1:0] SRAMID
 );
 '''
@@ -271,18 +242,16 @@ input wire [`BIST_ID_WIDTH-1:0] SRAMID
 
 def Get1RWCache():
   return '''
-reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
+   reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
 
-integer i;
-initial
-begin
-   for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
+   integer i;
+   initial
    begin
-      cache[i] = 0;
+      for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
+      begin
+         cache[i] = 0;
+      end
    end
-end
-
-
 
    reg [_PARAMS_WIDTH-1:0] dout_f;
 
@@ -299,83 +268,6 @@ end
       end
    end
 '''
-
-
-def Get2RWTemplate():
-  return '''
-`include "define.tmp.h"
-`ifdef DEFAULT_NETTYPE_NONE
-`default_nettype none
-`endif
-module _PARAMS_NAME
-(
-input wire MEMCLK,
-input wire RESET_N,
-input wire CEA,
-input wire [_PARAMS_HEIGHT_LOG-1:0] AA,
-input wire RDWENA,
-input wire CEB,
-input wire [_PARAMS_HEIGHT_LOG-1:0] AB,
-input wire RDWENB,
-input wire [_PARAMS_WIDTH-1:0] BWA,
-input wire [_PARAMS_WIDTH-1:0] DINA,
-output wire [_PARAMS_WIDTH-1:0] DOUTA,
-input wire [_PARAMS_WIDTH-1:0] BWB,
-input wire [_PARAMS_WIDTH-1:0] DINB,
-output wire [_PARAMS_WIDTH-1:0] DOUTB,
-input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
-input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
-output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
-input wire [`BIST_ID_WIDTH-1:0] SRAMID
-);
-reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
-
-integer i;
-initial
-begin
-   for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
-   begin
-      cache[i] = 0;
-   end
-end
-
-
-
-   reg [_PARAMS_WIDTH-1:0] dout_f0;
-
-   assign DOUTA = dout_f0;
-
-   always @ (posedge MEMCLK)
-   begin
-      if (CEA)
-      begin
-         if (RDWENA == 1'b0)
-            cache[AA] <= (DINA & BWA) | (cache[AA] & ~BWA);
-         else
-            dout_f0 <= cache[AA];
-      end
-   end
-
-
-
-   reg [_PARAMS_WIDTH-1:0] dout_f1;
-
-   assign DOUTB = dout_f1;
-
-   always @ (posedge MEMCLK)
-   begin
-      if (CEB)
-      begin
-         if (RDWENB == 1'b0)
-            cache[AB] <= (DINB & BWB) | (cache[AB] & ~BWB);
-         else
-            dout_f1 <= cache[AB];
-      end
-   end
-
-
-endmodule
-  '''
 
 def Get2RWHeader():
   return '''
@@ -401,23 +293,23 @@ input wire [_PARAMS_WIDTH-1:0] DINB,
 output wire [_PARAMS_WIDTH-1:0] DOUTB,
 input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
 input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
-output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
+output wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
 input wire [`BIST_ID_WIDTH-1:0] SRAMID
 );
   '''
 
 def Get2RWCache():
   return '''
-reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
+   reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
 
-integer i;
-initial
-begin
-   for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
+   integer i;
+   initial
    begin
-      cache[i] = 0;
+      for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
+      begin
+         cache[i] = 0;
+      end
    end
-end
 
    reg [_PARAMS_WIDTH-1:0] dout_f0;
    assign DOUTA = dout_f0;
@@ -471,23 +363,23 @@ input wire [_PARAMS_WIDTH-1:0] DINB,
 output wire [_PARAMS_WIDTH-1:0] DOUTB,
 input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
 input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
-output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
+output wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
 input wire [`BIST_ID_WIDTH-1:0] SRAMID
 );
   '''
 
 def Get1R1WCache():
   return '''
-reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
+   reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
 
-integer i;
-initial
-begin
-   for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
+   integer i;
+   initial
    begin
-      cache[i] = 0;
+      for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
+      begin
+         cache[i] = 0;
+      end
    end
-end
 
    reg [_PARAMS_WIDTH-1:0] dout_f0;
    assign DOUTA = dout_f0;
@@ -512,6 +404,77 @@ end
             cache[AB] <= (DINB & BWB) | (cache[AB] & ~BWB);
          else
             dout_f1 <= cache[AB];
+      end
+   end
+  '''
+
+def Get2R1WHeader():
+  return '''
+`include "define.tmp.h"
+`ifdef DEFAULT_NETTYPE_NONE
+`default_nettype none
+`endif
+module _PARAMS_NAME
+(
+input wire MEMCLK,
+input wire RESET_N,
+input wire CEA,
+input wire [_PARAMS_HEIGHT_LOG-1:0] AA,
+input wire CEB,
+input wire [_PARAMS_HEIGHT_LOG-1:0] AB,
+output wire [_PARAMS_WIDTH-1:0] DOUTA,
+output wire [_PARAMS_WIDTH-1:0] DOUTB,
+input wire CEW,
+input wire [_PARAMS_HEIGHT_LOG-1:0] AW,
+input wire [_PARAMS_WIDTH-1:0] BW,
+input wire [_PARAMS_WIDTH-1:0] DIN
+
+// input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
+// input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
+// output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
+// input wire [`BIST_ID_WIDTH-1:0] SRAMID
+);
+  '''
+
+def Get2R1WCache():
+  return '''
+reg [_PARAMS_WIDTH-1:0] cache [_PARAMS_HEIGHT-1:0];
+
+integer i;
+initial
+begin
+   for (i = 0; i < _PARAMS_HEIGHT; i = i + 1)
+   begin
+      cache[i] = 0;
+   end
+end
+
+   reg [_PARAMS_WIDTH-1:0] dout_f0;
+   assign DOUTA = dout_f0;
+   always @ (posedge MEMCLK)
+   begin
+      if (CEA)
+      begin
+        dout_f0 <= cache[AA];
+      end
+   end
+
+   reg [_PARAMS_WIDTH-1:0] dout_f1;
+   assign DOUTB = dout_f1;
+   always @ (posedge MEMCLK)
+   begin
+      if (CEB)
+      begin
+        dout_f1 <= cache[AB];
+      end
+   end
+
+
+   always @ (posedge MEMCLK)
+   begin
+      if (CEW)
+      begin
+        cache[AW] <= (DIN & BW) | (cache[AW] & ~BW);
       end
    end
   '''

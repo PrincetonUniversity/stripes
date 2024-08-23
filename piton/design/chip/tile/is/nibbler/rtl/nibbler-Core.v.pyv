@@ -1,0 +1,393 @@
+// Copyright (c) 2024 Princeton University
+// All rights reserved.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+//=========================================================================
+// Variable bit-width RISCV Core
+//=========================================================================
+// Inspired by a design from the Batten Research Group at Cornell University
+
+`ifndef NIBBLER_CORE_V
+`define NIBBLER_CORE_V
+
+<%
+from pyhplib import *
+%>
+
+module nibbler_Core
+(
+  input         clk,
+  input         reset_l,
+  output        nibbler_csr_int,
+  input         nibbler_int,
+  output        csr_disable_nibbler,
+
+  input                                 nibbler_conf,
+  input  [2:0]                          nibbler_code,
+  input  [63:0]                         conf_data,
+  output [63:0]                         nibbler_conf_read_data,
+
+  // Instruction Memory Request Port
+  // for 32 bit, memory req size is 67 bits, memory resp size is 35 bits
+  
+  output [67-1:0] imemreq_msg,
+  output                                 imemreq_nc,
+  output                                 imemreq_val,
+  input                                  imemreq_rdy,
+
+  // Instruction Memory Response Port
+
+  input [35-1:0] imemresp_msg,
+  input                               imemresp_val,
+  output                              imemresp_rdy,
+
+  // Extended memory address functionality
+  output                              use_addr_ext,
+  output [7:0]                        memreq_addr_ext,
+  output [31:0]                       memreq_data_ext,
+
+  // Data Memory Request Port
+
+  output [67-1:0] dmemreq_msg,
+  output                                 dmemreq_nc,
+  output                                 dmemreq_val,
+  input                                  dmemreq_rdy,
+
+  // Data Memory Response Port
+
+  input [35-1:0] dmemresp_msg,
+  input                               dmemresp_val,
+  output                              dmemresp_rdy,
+
+  // Scratchpad Interface
+  output [15:0]                                 spmemreq_msg_addr,
+<%
+print('  output ['+str(NIBBLER_P_NLANES*NIBBLER_P_NBITS-1)+':0] spmemreq_msg_data,')
+print('  output ['+str(NIBBLER_P_NLANES*NIBBLER_P_NBITS-1)+':0] spmemreq_msg_bw,')
+%>
+  output                                        spmemreq_rw,
+  output                                        spmemreq_val,
+  input                                         spmemreq_rdy,
+
+<%
+print('  input ['+str(NIBBLER_P_NLANES*NIBBLER_P_NBITS-1)+':0]  spmemresp_msg_data,')
+%>
+
+  // CP0 Status Register Output to Host
+  output [31:0] csr_status,
+
+  output [31:0] pc
+
+);
+
+<%
+print('  localparam NIBBLER_P_NBITS = '+str(NIBBLER_P_NBITS) + ';')
+print('  localparam NIBBLER_C_OFFBITS = '+str(NIBBLER_C_OFFBITS) + ';')
+print('  localparam NIBBLER_P_NLANES = '+str(NIBBLER_P_NLANES)+';')
+%>
+
+  wire reset = !reset_l;
+
+  wire [31:0]          imemreq_msg_addr;
+  wire [31:0]          imemresp_msg_data;
+  wire                 dmemreq_msg_rw;
+  wire  [1:0]          dmemreq_msg_len;
+  wire                 dmemreq_signed;
+  wire [31:0]          dmemreq_msg_addr;
+  wire [31:0]          dmemreq_msg_data;
+  wire [31:0]          dmemresp_msg_data;
+  wire                 sp_handshake_prev;
+  wire                 csr_read_en_Xhl;
+  wire                 csr_write_en_Xhl;
+  wire                 csr_ext_mem_mode;
+  wire                 vector_memop_Xhl;
+  wire                 new_inst;
+  wire [31:0]          ir;
+  wire                 pc_mux_sel_Xhl;
+  wire                 pc_plus4_mux_sel_Xhl;
+  wire [4:0]           rega_addr_Rhl;
+  wire [4:0]           regb_addr_Rhl;
+  wire [4:0]           wb_addr_Xhl;
+  wire                 wb_en_Xhl;
+  wire                 v_wb_en_Xhl;
+  wire                 vm_reg_en_Xhl;
+  wire                 masking_en_Xhl;
+  wire                 sp_subword_incr_Xhl;
+  wire                 wb_to_addr_Xhl;
+  wire                 wb_to_data_Xhl;
+
+  // ALU Inputs
+  `ifdef NIBBLER_VECTOR_SHIFT  
+  wire                 shamt_reg_en_Xhl;
+  wire                 shamt_mux_sel_Xhl;
+  wire                 adj_sw_mux_sel_Xhl;
+  wire                 adj_sw_reg_en_Xhl;
+  wire                 a_offset_mux_sel_Rhl;
+  wire                 a_offset_mux_sel_Xhl;
+  wire                 [4:0] shamt_imm_Xhl;
+  wire                 shift_inst_dir_Xhl;
+  wire                 a_rd_tmp_Xhl;
+  `endif
+
+  wire                 a_mux_sel_Xhl;
+<%
+print('  wire ['+str(NIBBLER_P_NBITS-1)+':0]            b_imm_Xhl;')
+%>
+  wire                 b_mux_sel_Xhl;
+  // ALU Outputs
+<%
+print('  wire ['+str(NIBBLER_C_OFFBITS-1)+':0]           a_subword_off_Rhl;')
+print('  wire ['+str(NIBBLER_C_OFFBITS-1)+':0]           b_subword_off_Rhl;')
+print('  wire ['+str(NIBBLER_C_OFFBITS-1)+':0]           wb_subword_off_Xhl;')
+%>
+  wire                 addsub_fn_Xhl;
+  wire [1:0]           logic_fn_Xhl;
+  wire [1:0]           alu_fn_type_Xhl;
+
+  wire                 prop_flag_Xhl;
+  wire                 carry_in_1_Xhl;
+  wire                 flag_reg_en_Xhl;
+  wire                 addr_shift_dir_sel_Xhl;
+  wire                 addr_reg_en_Xhl;
+  wire                 last_uop_Xhl;
+  wire                 br_reg_en_Xhl;
+  wire [2:0]           br_type_Xhl;
+
+  wire                 b_use_imm_reg_Xhl;
+  wire [31:0]          proc2cop_data_Xhl;
+
+  wire                 vl_reg_en_Xhl;
+  //----------------------------------------------------------------------
+  // Pack Memory Request Messages
+  //----------------------------------------------------------------------
+
+  assign imemreq_msg = {1'b0, imemreq_msg_addr, 2'b0, 32'b0};
+
+  assign dmemreq_msg = {dmemreq_msg_rw, dmemreq_msg_addr, dmemreq_msg_len, dmemreq_msg_data};
+
+  //----------------------------------------------------------------------
+  // Unpack Memory Response Messages
+  //----------------------------------------------------------------------
+
+  assign imemresp_msg_data = imemresp_msg[31:0];
+
+  assign dmemresp_msg_data = dmemresp_msg[31:0];
+
+  //----------------------------------------------------------------------
+  // Control Unit
+  //----------------------------------------------------------------------
+
+  nibbler_Ctrl ctrl
+  (
+    .clk                    (clk),
+    .reset                  (reset),
+    .nibbler_csr_int        (nibbler_csr_int),
+    .nibbler_int            (nibbler_int),
+
+    // Instruction Memory Port
+
+    .imemreq_val            (imemreq_val),
+    .imemreq_rdy            (imemreq_rdy),
+    .imemresp_msg_data      (imemresp_msg_data),
+    .imemresp_val           (imemresp_val),
+    .imemresp_rdy           (imemresp_rdy),
+
+    // Data Memory Port
+
+    .dmemreq_msg_rw         (dmemreq_msg_rw),
+    .dmemreq_msg_len        (dmemreq_msg_len),
+    .dmemreq_signed         (dmemreq_signed),
+    .dmemreq_val            (dmemreq_val),
+    .dmemreq_rdy            (dmemreq_rdy),
+    .dmemresp_val           (dmemresp_val),
+    .dmemresp_rdy           (dmemresp_rdy),
+
+    .vector_memop_Xhl       (vector_memop_Xhl),
+    .spmemreq_rw            (spmemreq_rw),
+    .spmemreq_val           (spmemreq_val),
+    .spmemreq_rdy           (spmemreq_rdy),
+    .sp_handshake_prev      (sp_handshake_prev),
+
+    .csr_read_en_Xhl        (csr_read_en_Xhl),
+    .csr_write_en_Xhl       (csr_write_en_Xhl),
+    .csr_ext_mem_mode       (csr_ext_mem_mode),
+
+    .ir                     (ir),
+    .pc_mux_sel_Xhl         (pc_mux_sel_Xhl),
+
+    .pc_plus4_mux_sel_Xhl   (pc_plus4_mux_sel_Xhl),
+    .rega_addr_Rhl          (rega_addr_Rhl),
+    .regb_addr_Rhl          (regb_addr_Rhl),
+    .wb_addr_Xhl            (wb_addr_Xhl),
+    .sp_subword_incr_Xhl    (sp_subword_incr_Xhl),
+    .wb_en_Xhl              (wb_en_Xhl), 
+    .v_wb_en_Xhl            (v_wb_en_Xhl),
+    .vm_reg_en_Xhl          (vm_reg_en_Xhl),
+    .masking_en_Xhl         (masking_en_Xhl),
+    .wb_to_addr_Xhl         (wb_to_addr_Xhl),      
+    .wb_to_data_Xhl         (wb_to_data_Xhl),
+
+    `ifdef NIBBLER_VECTOR_SHIFT 
+    .shamt_reg_en_Xhl       (shamt_reg_en_Xhl), 
+    .shamt_mux_sel_Xhl      (shamt_mux_sel_Xhl), 
+    .adj_sw_mux_sel_Xhl     (adj_sw_mux_sel_Xhl),
+    .adj_sw_reg_en_Xhl      (adj_sw_reg_en_Xhl),
+    .a_offset_mux_sel_Rhl   (a_offset_mux_sel_Rhl),
+    .a_offset_mux_sel_Xhl   (a_offset_mux_sel_Xhl),
+    .shamt_imm_Xhl          (shamt_imm_Xhl),   
+    .shift_inst_dir_Xhl     (shift_inst_dir_Xhl),
+    .a_rd_tmp_Xhl           (a_rd_tmp_Xhl),
+    `endif
+
+    .a_mux_sel_Xhl          (a_mux_sel_Xhl),
+    .b_imm_Xhl              (b_imm_Xhl),
+    .b_mux_sel_Xhl          (b_mux_sel_Xhl),
+
+    .a_subword_off_Rhl      (a_subword_off_Rhl),
+    .b_subword_off_Rhl      (b_subword_off_Rhl),
+    .wb_subword_off_Xhl     (wb_subword_off_Xhl),
+    .addsub_fn_Xhl          (addsub_fn_Xhl),
+    .logic_fn_Xhl           (logic_fn_Xhl),
+    .alu_fn_type_Xhl        (alu_fn_type_Xhl),
+
+    .prop_flag_Xhl          (prop_flag_Xhl),
+    .carry_in_1_Xhl         (carry_in_1_Xhl),
+    .flag_reg_en_Xhl        (flag_reg_en_Xhl),
+    .addr_shift_dir_sel_Xhl (addr_shift_dir_sel_Xhl),
+    .addr_reg_en_Xhl        (addr_reg_en_Xhl),
+    .last_uop_Xhl           (last_uop_Xhl),
+    .br_reg_en_Xhl          (br_reg_en_Xhl),
+    .br_type_Xhl            (br_type_Xhl),
+
+    .b_use_imm_reg_Xhl      (b_use_imm_reg_Xhl),
+    .proc2cop_data_Xhl      (proc2cop_data_Xhl),
+
+    .vl_reg_en_Xhl          (vl_reg_en_Xhl),
+
+    .cp0_status             (csr_status)
+
+  );
+
+  //----------------------------------------------------------------------
+  // Datapath
+  //----------------------------------------------------------------------
+  wire [31:0] nibbler_dcp_csr_read_data;
+  assign nibbler_conf_read_data = {32'b0, nibbler_dcp_csr_read_data} ;
+
+  nibbler_Dpath dpath
+  (
+    .clk                     (clk),
+    .reset                   (reset),
+    .nibbler_csr_int         (nibbler_csr_int),
+    .nibbler_int             (nibbler_int),
+    .csr_disable_nibbler     (csr_disable_nibbler),
+
+    .imemreq_msg_addr        (imemreq_msg_addr),
+    .imemreq_nc              (imemreq_nc),
+    .dmemreq_msg_addr        (dmemreq_msg_addr),
+    .dmemreq_msg_data        (dmemreq_msg_data),
+    .dmemreq_msg_len         (dmemreq_msg_len),
+    .dmemreq_nc              (dmemreq_nc),
+    .memreq_signed           (dmemreq_signed),
+    .dmemresp_msg_data       (dmemresp_msg_data),
+    .dmemresp_val_Xhl        (dmemresp_val),
+    .use_addr_ext            (use_addr_ext),
+    .memreq_addr_ext         (memreq_addr_ext),
+    .memreq_data_ext         (memreq_data_ext),
+
+    // Scratchpad Interface
+    .vector_memop_Xhl       (vector_memop_Xhl),
+    .spmemreq_rw            (spmemreq_rw),
+    .spmemreq_msg_addr      (spmemreq_msg_addr),
+    .spmemreq_msg_data      (spmemreq_msg_data),
+    .spmemreq_msg_bw        (spmemreq_msg_bw),
+    .spmemresp_msg_data     (spmemresp_msg_data),
+    .sp_handshake_prev      (sp_handshake_prev),
+
+    // CSRs
+    .csr_read_en_Xhl           (csr_read_en_Xhl),
+    .csr_write_en_Xhl          (csr_write_en_Xhl),
+    .csr_ext_mem_mode          (csr_ext_mem_mode),
+    .nibbler_conf              (nibbler_conf),
+    .nibbler_code              (nibbler_code),
+    .conf_data                 (conf_data[31:0]),
+    .nibbler_dcp_csr_read_data (nibbler_dcp_csr_read_data),
+
+    // Controls Signals (ctrl->dpath)
+    .ir                      (ir),
+    .pc_mux_sel_Xhl          (pc_mux_sel_Xhl),
+    .pc_plus4_mux_sel_Xhl    (pc_plus4_mux_sel_Xhl),
+    .rega_addr_Rhl           (rega_addr_Rhl),
+    .regb_addr_Rhl           (regb_addr_Rhl),
+    .wb_addr_Xhl             (wb_addr_Xhl),
+    .wb_en_Xhl               (wb_en_Xhl),
+    .v_wb_en_Xhl             (v_wb_en_Xhl),
+    .vm_reg_en_Xhl           (vm_reg_en_Xhl),
+    .masking_en_Xhl          (masking_en_Xhl),
+    .sp_subword_incr_Xhl     (sp_subword_incr_Xhl),
+    .wb_to_addr_Xhl          (wb_to_addr_Xhl),
+    .wb_to_data_Xhl          (wb_to_data_Xhl),
+
+    `ifdef NIBBLER_VECTOR_SHIFT 
+    .shamt_reg_en_Xhl        (shamt_reg_en_Xhl), 
+    .shamt_mux_sel_Xhl       (shamt_mux_sel_Xhl),
+    .adj_sw_mux_sel_Xhl      (adj_sw_mux_sel_Xhl),  
+    .adj_sw_reg_en_Xhl       (adj_sw_reg_en_Xhl),
+    .a_offset_mux_sel_Rhl    (a_offset_mux_sel_Rhl),
+    .a_offset_mux_sel_Xhl    (a_offset_mux_sel_Xhl),
+    .shamt_imm_Xhl           (shamt_imm_Xhl), 
+    .shift_inst_dir_Xhl      (shift_inst_dir_Xhl),
+    .a_rd_tmp_Xhl            (a_rd_tmp_Xhl),
+    `endif
+
+    .a_mux_sel_Xhl           (a_mux_sel_Xhl),
+    .b_imm_Xhl               (b_imm_Xhl),
+    .b_mux_sel_Xhl           (b_mux_sel_Xhl),
+
+    .a_subword_off_Rhl       (a_subword_off_Rhl),
+    .b_subword_off_Rhl       (b_subword_off_Rhl),
+    .wb_subword_off_Xhl      (wb_subword_off_Xhl),
+    .addsub_fn_Xhl           (addsub_fn_Xhl),
+    .logic_fn_Xhl            (logic_fn_Xhl),
+    .alu_fn_type_Xhl         (alu_fn_type_Xhl),
+
+    .prop_flag_Xhl           (prop_flag_Xhl),
+    .carry_in_1_Xhl          (carry_in_1_Xhl),
+    .flag_reg_en_Xhl         (flag_reg_en_Xhl),
+    .addr_shift_dir_sel_Xhl  (addr_shift_dir_sel_Xhl),
+    .addr_reg_en_Xhl         (addr_reg_en_Xhl),
+    .last_uop_Xhl            (last_uop_Xhl),
+    .br_reg_en_Xhl           (br_reg_en_Xhl),
+    .br_type_Xhl             (br_type_Xhl),
+
+    .b_use_imm_reg_Xhl       (b_use_imm_reg_Xhl),
+    .proc2cop_data_Xhl       (proc2cop_data_Xhl),
+
+    .vl_reg_en_Xhl           (vl_reg_en_Xhl),
+    .pc                      (pc)
+
+  );
+
+endmodule
+
+`endif

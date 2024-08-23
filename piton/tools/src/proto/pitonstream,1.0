@@ -55,6 +55,8 @@ class bcolors:
 
 
 FLOG_NAME = os.path.join(MODEL_DIR, "uart_piton.log")
+USTR_NAME = os.path.join(MODEL_DIR, "test.ustr")
+
 
 CFG_DONE_KEY        = "DONE"
 TEST_PASSED_KEY     = "PASSED"
@@ -93,6 +95,7 @@ def usage():
     print("              Name of a supported core configuration:", file=sys.stderr)
     print("                  sparc     (opensparc T1 core, default)", file=sys.stderr)
     print("                  ariane    (64bit RISCV core)", file=sys.stderr)
+    print("                  decoupling(ariane core and IS tile)", file=sys.stderr)
     print("\n       -f, --file <filename>", file=sys.stderr)
     print("              File name with test names. If option --ustr is not specified,", file=sys.stderr)
     print("              they should be assembly test names, otherwise list of generated", file=sys.stderr)
@@ -108,12 +111,19 @@ def usage():
     print("              Optional.  Needs to be specified if this parameter differs from the board default.", file=sys.stderr)
     print("\n       --midas_args <midas args>", file=sys.stderr)
     print("              Optional.  String containing arguments to midas to add during ", file=sys.stderr)
-    print("              compilation of the assembly test", file=sys.stderr)
+    print("              compilation of the assembly test. For OpenSPARC T1.", file=sys.stderr)
+    print("\n       --gcc_args <gcc args>", file=sys.stderr)
+    print("              Optional.  String containing arguments to compiler during ", file=sys.stderr)
+    print("              compilation of RISCV test. Seperated by comma.", file=sys.stderr)
     print("\n       --ustr", file=sys.stderr)
     print("              Specifies that test names in the file should be treated as .ustr file names", file=sys.stderr)
     print("\n       --no_wait_fpga_config", file=sys.stderr)
     print("              Do not wait for signal that FPGA is configured before running tests.", file=sys.stderr)
     print("              Assume FPGA is configured at launch.", file=sys.stderr)
+    print("\n       --gen_ustr", file=sys.stderr)
+    print("              Just generate the ustr file. Not connected to FPGA.", file=sys.stderr)
+    print("\n       --ustr_suffix", file=sys.stderr)
+    print("              Add suffix to the generated ustr file name", file=sys.stderr)
     print("\n       -h, --help", file=sys.stderr)
     print("              Display this help message and exit", file=sys.stderr)
     print("\n", file=sys.stderr)
@@ -281,12 +291,12 @@ def addrDataFromC(fname):
 
     return test_addr_data_map
 
-def compileASMTest(tname, uart_div_latch, st_brd, flog, midas_args=None, coreType="sparc", precompiled=False, x_tiles=1, y_tiles=1):
+def compileASMTest(tname, uart_div_latch, st_brd, flog, midas_args=None, gcc_args=None, coreType="sparc", precompiled=False, x_tiles=1, y_tiles=1):
     prev_dir = os.getcwd()
     os.chdir(MODEL_DIR)
     print_info("Compiling %s" % tname)
     # Run midas only to get mem.image file
-    rv = runMidas(tname, uart_div_latch, flog, midas_args, coreType, precompiled, x_tiles, y_tiles)
+    rv = runMidas(tname, uart_div_latch, flog, midas_args, gcc_args, coreType, precompiled, x_tiles, y_tiles)
     if rv != 0:
         return rv
 
@@ -304,7 +314,7 @@ def compileASMTest(tname, uart_div_latch, st_brd, flog, midas_args=None, coreTyp
 
     # Since we are using an existent synthesized mapping, we have to check
     # that all sections of new tests are mapped
-    rv = isTranslatorOK(addr_data_map, flog, coreType=="ariane")
+    rv = isTranslatorOK(addr_data_map, flog, (coreType=="ariane") or (coreType=="decoupling"))
     if not rv:
         print_error("Can't use existent storage_addr_trans.tmp.v for %s" % tname)
         return 1
@@ -336,8 +346,11 @@ def setParserOptions(parser):
     parser.add_option("--y_tiles", dest="y_tiles", action="store", default=1)
     parser.add_option("--precompiled", dest="precompiled", action="store_true", default=False)
     parser.add_option("--midas_args", dest="midas_args", action="store")
+    parser.add_option("--gcc_args", dest="gcc_args", action="store")
     parser.add_option("--ustr", dest="ustr", action="store_true", default=False)
     parser.add_option("--no_wait_fpga_config", dest="no_wait_fpga_config", action="store_true", default=False)
+    parser.add_option("--gen_ustr", dest="gen_ustr", action="store_true", default=False)
+    parser.add_option("--ustr_suffix", dest="suffix", action="store", default="")
     parser.add_option("-h", "--help", dest="help", action="store_true", default=False)
 
     return parser
@@ -366,19 +379,23 @@ def main():
 
     # Get list of tests and board configuration
     tests = getTestList(options.fname, flog, options.ustr)
+    
     # Calculate UART divider latch before test compilation
     design_data = find_design_block(options.design)
     uart_div_latch = calcUARTLatch(design_data, options.board)
     print_info("UART DIV Latch value: 0x%x" % uart_div_latch)
 
-
-    print_info("Configuring port /dev/%s" % options.port)
-    ser = configureUART(options.port)
-    if ser == None:
-        exitProgram(1, None, flog)
+    # Configure UART port
+    if not options.gen_ustr:
+        print_info("Configuring port /dev/%s" % options.port)
+        ser = configureUART(options.port)
+        if ser == None:
+           exitProgram(1, None, flog)
+    else:
+        ser = None
 
     # Wait until FPGA is configure
-    if not options.no_wait_fpga_config:
+    if (not options.no_wait_fpga_config) and (not options.gen_ustr):
     	writeSTDOUT("Press reset button on FPGA\n")
     	writeSTDOUT("Waiting...\n")
     	while True:
@@ -404,52 +421,60 @@ def main():
             print_info("Using precompiled RISCV test for Ariane.")
         # Compile .s tests to get .ustr
         if options.ustr == False:
-            rv = compileASMTest(tname, uart_div_latch, st_brd, flog, options.midas_args, options.core, options.precompiled, options.x_tiles, options.y_tiles)
+            rv = compileASMTest(tname, uart_div_latch, st_brd, flog, options.midas_args, options.gcc_args, options.core, options.precompiled, options.x_tiles, options.y_tiles)
             if rv != 0:
                 print_error("Test compilation failed")
                 print_error("Skipping %s" % tname)
                 print_error("See %s for more information\n\n" % FLOG_NAME)
                 continue
-            ustr_name = "test.ustr"
+            ustr_name = USTR_NAME
+            if options.gen_ustr:
+                # rename the generated ustr file with original test name
+                if not os.path.exists('ustr_files'):
+                    os.makedirs('ustr_files')
+                ustr_name = tname.split('.', 1)[0]+options.suffix+'.ustr';
+                print_info("Generated ustr file: "+ustr_name)
+                os.system('mv '+USTR_NAME+' ustr_files/'+ustr_name)
         # Use pregenerated .ustr files
         else:
             ustr_name = tname
 
-        try:
-            (rv, tstart) = loadTest(ustr_name, ser)
-            if rv != 0:
-                print_error("Can not upload a stream. Skipping %s" % tname)
-                continue
-            (event, tstop) = pollUART(ser)
+        if not options.gen_ustr:
+            try:
+                (rv, tstart) = loadTest(ustr_name, ser)
+                if rv != 0:
+                    print_error("Can not upload a stream. Skipping %s" % tname)
+                    continue
+                (event, tstop) = pollUART(ser)
 
-            tstatus = "UNKNOWN"
-            if event == CFG_DONE_EVENT:
-                writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
-                writeSTDOUT("%s : %sInterrupted by HW reset%s\n\n" % (tname, bcolors.FAILED, bcolors.ENDC))
-                tstatus = "HWRESET"
+                tstatus = "UNKNOWN"
+                if event == CFG_DONE_EVENT:
+                    writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
+                    writeSTDOUT("%s : %sInterrupted by HW reset%s\n\n" % (tname, bcolors.FAILED, bcolors.ENDC))
+                    tstatus = "HWRESET"
 
-            if event == TEST_PASSED_EVENT:
-                writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
-                writeSTDOUT("%s : %sPASSED%s\n" % (tname, bcolors.PASSED, bcolors.ENDC))
-                tstatus = "PASS"
+                if event == TEST_PASSED_EVENT:
+                    writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
+                    writeSTDOUT("%s : %sPASSED%s\n" % (tname, bcolors.PASSED, bcolors.ENDC))
+                    tstatus = "PASS"
 
-            if event == TEST_FAILED_EVENT:
-                writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
-                writeSTDOUT("%s : %sFAILED%s\n\n" % (tname, bcolors.FAILED, bcolors.ENDC))
-                tstatus = "FAIL"
+                if event == TEST_FAILED_EVENT:
+                    writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
+                    writeSTDOUT("%s : %sFAILED%s\n\n" % (tname, bcolors.FAILED, bcolors.ENDC))
+                    tstatus = "FAIL"
 
-            if event == TEST_TIMEOUT_EVENT:
-                writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
-                writeSTDOUT("%s : %sTIMEOUT%s\n\n" % (tname, bcolors.TIMEOUT, bcolors.ENDC))
-                tstatus = "TIMEOUT"
+                if event == TEST_TIMEOUT_EVENT:
+                    writeSTDOUT("\n<<< END OF TEST OUTPUT\n")
+                    writeSTDOUT("%s : %sTIMEOUT%s\n\n" % (tname, bcolors.TIMEOUT, bcolors.ENDC))
+                    tstatus = "TIMEOUT"
 
-            test_time = tstop - tstart
-            print_info("Execution time: %.8f sec\n\n" % test_time)
-            csvwriter.writerow([test_cnt-1,tname,tstatus,"%.8f" % test_time])
+                test_time = tstop - tstart
+                print_info("Execution time: %.8f sec\n\n" % test_time)
+                csvwriter.writerow([test_cnt-1,tname,tstatus,"%.8f" % test_time])
 
-        except KeyboardInterrupt:
-            processKeyboardInterrupt(ser, flog)
-            return
+            except KeyboardInterrupt:
+                processKeyboardInterrupt(ser, flog)
+                return
     fp.close()
 
     writeSTDOUT("\n==============================\n")

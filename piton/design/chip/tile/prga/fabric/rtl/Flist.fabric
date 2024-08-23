@@ -1,0 +1,112 @@
+// Copyright (c) 2024 Princeton University
+// All rights reserved.
+
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+// basic primitives
+prga_fifo_resizer.v
+prga_fifo_adapter.v
+prga_fifo_buf.v
+
+// programming cells
+scanchain_data_d2.v
+scanchain_data_d3.v
+scanchain_data_d4.v
+scanchain_data_d5.v
+scanchain_data_d7.v
+scanchain_data_d76.v
+scanchain_delim.v
+prga_simple_buf.v
+prga_simple_bufr.v
+pktchain_clasp.v
+pktchain_dispatcher.v
+pktchain_frame_assemble.v
+pktchain_frame_disassemble.v
+pktchain_gatherer.v
+pktchain_router.v
+
+// switches
+sw10.v
+sw100.v
+sw2.v
+sw24.v
+sw3.v
+sw30.v
+sw4.v
+sw5.v
+sw6.v
+sw7.v
+sw8.v
+sw9.v
+
+// logic primitives
+dffe.v
+grady18v2.v
+iopad.v
+fracram_a11d32.v
+prga_prim_mul.v
+
+// blocks
+prga_clb.v
+prga_bram.v
+prga_iob.v
+prga_bmul.v
+
+// connection boxes
+cbox_prga_t_bram_w0.v
+cbox_prga_t_bram_w1.v
+cbox_prga_t_bmul_w0.v
+cbox_prga_t_bmul_w1.v
+cbox_prga_t_clb_w0.v
+cbox_prga_t_iob_w0.v
+
+// single-tile arrays
+prga_a_bram.v
+prga_a_clb.v
+prga_a_iob.v
+prga_a_bmul.v
+
+// tiles
+prga_t_bram.v
+prga_t_clb.v
+prga_t_iob.v
+prga_t_bmul.v
+
+// switch boxes
+sbox_nw_ESW.v
+sbox_nw_SWw_ex_w.v
+sbox_sw_N.v
+sbox_sw_N_ex_w.v
+
+// regions
+prga_region_left.v
+prga_region_right.v
+
+// fabric top
+prga_fabric.v
+
+// programming backend
+prga_be_prog_pktchain.v
+
+// integration wrapper
+prga_fabric_wrap.v

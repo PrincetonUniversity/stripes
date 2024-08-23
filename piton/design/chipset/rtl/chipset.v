@@ -481,8 +481,8 @@ module chipset(
     // Debug
 ,    output                                                 ndmreset_o      // non-debug module reset
 ,    output                                                 dmactive_o      // debug module is active
-,    output  [`PITON_NUM_TILES-1:0]                         debug_req_o     // async debug request
-,    input   [`PITON_NUM_TILES-1:0]                         unavailable_i   // communicate whether the hart is unavailable (e.g.: power down)
+,    output  [`PITON_RV64_TILES-1:0]                         debug_req_o     // async debug request
+,    input   [`PITON_RV64_TILES-1:0]                         unavailable_i   // communicate whether the hart is unavailable (e.g.: power down)
     // JTAG
 ,    input                                                  tck_i
 ,    input                                                  tms_i
@@ -495,13 +495,13 @@ module chipset(
 `ifdef PITON_RV64_CLINT
     // CLINT
 ,    input                                                  rtc_i           // Real-time clock in (usually 32.768 kHz)
-,    output  [`PITON_NUM_TILES-1:0]                         timer_irq_o     // Timer interrupts
-,    output  [`PITON_NUM_TILES-1:0]                         ipi_o           // software interrupt (a.k.a inter-process-interrupt)
+,    output  [`PITON_RV64_TILES-1:0]                         timer_irq_o     // Timer interrupts
+,    output  [`PITON_RV64_TILES-1:0]                         ipi_o           // software interrupt (a.k.a inter-process-interrupt)
 `endif // ifdef PITON_RV64_CLINT
 
 `ifdef PITON_RV64_PLIC
     // PLIC
-,    output  [`PITON_NUM_TILES*2-1:0]                       irq_o           // level sensitive IR lines, mip & sip (async)
+,    output  [`PITON_RV64_TILES*2-1:0]                       irq_o           // level sensitive IR lines, mip & sip (async)
 `endif // ifdef PITON_RV64_PLIC
 `endif // ifdef PITON_RV64_PLATFORM
 

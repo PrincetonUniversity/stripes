@@ -16,10 +16,10 @@
 #include <stdio.h>
 
 
-#define NHARTS       1
+#define NHARTS       PITON_RV64_TILES
 #define PLIC_SOURCES 2
-#define CLINT_BASE   0xfff1020000ULL
-#define PLIC_BASE    0xfff1030000ULL
+#define CLINT_BASE   0xe103c00000ULL
+#define PLIC_BASE    0xe200000000ULL
 
 int main(int argc, char ** argv) {
 
@@ -48,26 +48,25 @@ int main(int argc, char ** argv) {
           printf("CLINT: result = 0x%016x\n",*addr);
       }
 
-      // printf("Reading PLIC registers...\n");
-      // 
-      // volatile uint32_t val2;
-      // // priorities
-      // for (uint64_t k = 0; k < 128; k++) {
-      //     val2 = *(uint32_t*)((PLIC_BASE + 0x4)>>2 + k);
-      //     printf("PLIC: source prio %d = 0x%08x\n",k,val2);
-      // }
-      // // pending
-      // for (uint64_t k = 0; k < 5; k++) {
-      //     val2 = *(uint32_t*)((PLIC_BASE + 0x1000)>>2 + k);
-      //     printf("PLIC: pending %d = 0x%08x\n",k,val2);
-      // }
-      // // pending
-      // for (uint64_t i = 0; i < NHARTS; i++) {
-      //     for (uint64_t k = 0; k < 5; k++) {
-      //         val2 = *(uint32_t*)((PLIC_BASE + 0x2000)>>2 + k);
-      //         printf("PLIC: hart %d m-mode enable %d = 0x%08x\n",k,val2);
-      //     }      
-      // }
+      printf("Reading PLIC registers...\n");
+      volatile uint32_t val2;
+      // priorities
+      for (uint64_t k = 0; k < PLIC_SOURCES; k++) {
+          val2 = *(uint32_t*)(PLIC_BASE + 0x4 + k * 4);
+          printf("PLIC: source prio %d = 0x%08x\n",k,val2);
+      }
+      // pending
+      for (uint64_t k = 0; k < 5; k++) {
+          val2 = *(uint32_t*)(PLIC_BASE + 0x1000 + k * 4);
+          printf("PLIC: pending %d = 0x%08x\n",k,val2);
+      }
+      // enabling
+      for (uint64_t i = 0; i < NHARTS; i++) {
+          for (uint64_t k = 0; k < 1; k++) {
+              val2 = *(uint32_t*)(PLIC_BASE + 0x2000 + i * 0x100 + k * 4);
+              printf("PLIC: hart %d m-mode enable %d = 0x%08x\n", i, k, val2);
+          }      
+      }
 
       printf("Done!\n");
   }

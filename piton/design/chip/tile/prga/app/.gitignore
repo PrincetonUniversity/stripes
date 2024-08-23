@@ -1,0 +1,5 @@
+*/*
+!*/Flist.*
+!*/*.v
+!*/Makefile
+!*/config.yaml

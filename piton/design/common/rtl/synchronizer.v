@@ -68,22 +68,6 @@ output reg [SIZE-1:0] syncdata;
 `endif
 
 
-    // bw_u1_syncff_4x u_synchronizer_syncff [SIZE-1:0](.q(presyncdata_tmp),
-    //                  .so(),
-    //                  .ck(clk),
-    //                  .d(presyncdata),
-    //                  .sd(),
-    //                  .se(1'b0)
-    //                  );
-
-    // bw_u1_soff_2x u_synchronizer_ff[SIZE-1:0] (.q(syncdata),
-    //                  .so(),
-    //                  .ck(clk),
-    //                  .d(presyncdata_tmp),
-    //                  .sd(),
-    //                  .se(1'b0)
-    //                  );
-
 always @ (posedge clk)
 begin
     presyncdata_tmp <= presyncdata;

@@ -453,7 +453,6 @@ module jtag_testbench_top_helper
         .valid_out(iob_noc1_valid_in),       // Val signal from dynamic network to processor
         .ready_out(iob_noc1_ready_in)    // Rdy signal from processor to dynamic network
     );
-
     ciop_fake_iob ciop_fake_iob(
         .noc_out_val       (iob_noc2_valid_out),
         .noc_out_rdy       (iob_noc2_ready_out),
@@ -474,9 +473,8 @@ module jtag_testbench_top_helper
                 print(text2)
         %>
         .clk               (fpga_clk),
-        .rst_n             (`SPARC_CORE0.reset_l)
+        .rst_n     (`CHIP.rst_n_inter_sync)
         );
-
 ////////////////////////////////////////////////////////
 // MONITOR STUFF
 ////////////////////////////////////////////////////////
@@ -486,7 +484,6 @@ module jtag_testbench_top_helper
     reg [3:0] stub_pass;
     reg init_done;
     integer j;
-
     // Tri: slam init is taken out because it's too complicated to extend to 64 cores
     // slam_init slam_init () ;
 
@@ -494,6 +491,8 @@ module jtag_testbench_top_helper
     //  and it is randomized. For some reason if we left it as X's some tests will fail
     <%
         t = '''
+        `ifdef OST1_PLI_SLAM_RANDOM
+        `ifdef RTL_SPARC0
         initial begin
             $slam_random(`SPARC_REG0.bw_r_irf_core.register01.bw_r_irf_register.window, 8, 0);
             $slam_random(`SPARC_REG0.bw_r_irf_core.register02.bw_r_irf_register.window, 8, 0);
@@ -527,6 +526,8 @@ module jtag_testbench_top_helper
             $slam_random(`SPARC_REG0.bw_r_irf_core.register30.bw_r_irf_register.window, 8, 0);
             $slam_random(`SPARC_REG0.bw_r_irf_core.register31.bw_r_irf_register.window, 8, 0);
         end
+        `endif
+        `endif
         '''
 
         for i in range(PITON_NUM_TILES) :
@@ -534,14 +535,12 @@ module jtag_testbench_top_helper
             print(tt)
     %>
 
-
     // this is the T1 sparc core monitor
     monitor   monitor(
         .clk    (chip.clk_muxed),
         .cmp_gclk  (chip.clk_muxed),
-        .rst_l     (`SPARC_CORE0.reset_l)
+        .rst_l     (`CHIP.rst_n_inter_sync)
         );
-
     jtag_mon jtag_mon(
         .clk (chip.clk_muxed)
         );
@@ -570,7 +569,7 @@ module jtag_testbench_top;
         test_case_num = test_case_num + 1;
     end
     reg send_wakeup;
-    reg [31:0] jtag_timeout = 100000000;
+    reg [31:0] jtag_timeout = 200000000;
     reg force_cache = 0;
     initial
     begin
@@ -660,9 +659,10 @@ module jtag_testbench_top;
         //`endif
         end
 
+        `ifdef RTL_SPARC0
         if (force_cache)
             force helper.chip.tile0.g_sparc_core.core.sparc0.lsu.lsu.lsu_ifu_icache_en = 4'b1111;
-
+        `endif
         pll_rst_n = 0;           // reset is held low upon boot up
         chip_rst_n = 0;
         jtag_rst_l = 0;

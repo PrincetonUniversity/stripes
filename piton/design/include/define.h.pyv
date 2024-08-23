@@ -55,6 +55,7 @@ import pyhplib
 from pyhplib import *
 
 print("`define PITON_NUM_TILES %d" % PITON_NUM_TILES)
+print("`define PITON_RV64_TILES %d" % PITON_RV64_TILES)
 print("`define PITON_X_TILES %d"   % PITON_X_TILES)
 print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 %>
@@ -75,7 +76,18 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 `define NOC_FBITS_L1        4'd0
 `define NOC_FBITS_L2        4'd0
 `define NOC_FBITS_FP        4'd0
-`define NOC_FBITS_MEM       4'd2
+`define NOC_FBITS_MEM       4'd5
+`define NOC_FBITS_DCP       4'b1000
+`define NOC_FBITS_SP        4'b1101
+`define NOC_FBITS_MMU       4'b1010
+`define NOC_FBITS_DREAM     4'b1011
+`define NOC_FBITS_NIBBLER   4'b1100
+`define NOC_FBITS_ACC       4'b1101
+`define NOC_FBITS_ACC_PLM   4'b1110
+`define NOC_FBITS_PRGA      4'h9
+`define NOC_FBITS_PLIC      4'd11
+`define NOC_FBITS_CLINT     4'd12
+`define NOC_FBITS_DEBUG     4'd13
 
 `define NOC_NODEID_WIDTH    34
 `define NOC_DATACOUNT_WIDTH 5
@@ -121,7 +133,7 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 `define MSG_ADDR                119:80
 
 `define MSG_AMO_MASK1           135:128
-`define MSG_LSID                147:142
+`define MSG_LSID                147:141
 `define MSG_SDID                157:148
 `define MSG_SRC_FBITS           161:158
 `define MSG_SRC_Y               169:162
@@ -141,7 +153,7 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 
 // HEADER 3
 `define MSG_AMO_MASK1_           7:0
-`define MSG_LSID_                19:14 // 147-128:142-128
+`define MSG_LSID_                19:13 // 147-128:141-128
 `define MSG_SDID_                29:20
 `define MSG_OPTIONS_3_           29:0
 `define MSG_SRC_FBITS_           33:30
@@ -378,10 +390,14 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 //Additional fields for Sharer Domain ID and Logical Sharer ID
 //For coherence domain restriction only
 
-`define MSG_SDID_WIDTH          10
-`define MSG_LSID_WIDTH          6
-`define MSG_HDID_WIDTH          10
-`define MSG_LHID_WIDTH          6
+`define MSG_SDID_WIDTH          11
+`define MSG_LSID_WIDTH          7
+`define MSG_HDID_WIDTH          11
+`define MSG_LHID_WIDTH          7
+
+`define MSG_AMO_MASK0_WIDTH     8
+`define MSG_AMO_MASK1_WIDTH     8
+`define MSG_AMO_MASK_WIDTH      16
 
 `define MSG_AMO_MASK0_WIDTH     8
 `define MSG_AMO_MASK1_WIDTH     8
@@ -438,7 +454,8 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 //`define TTE_CSM_RES3            0
 
 
-
+// Specify the HOME ID bits in address 
+// for different home allocation strategy
 `define HOME_ID_WIDTH               `MSG_LHID_WIDTH
 `define HOME_ID_ADDR_POS_LOW        `HOME_ID_WIDTH+5 : 6
 `define HOME_ID_ADDR_POS_MIDDLE     `HOME_ID_WIDTH+13 : 14
@@ -449,10 +466,11 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 //`define HOME_ID_Y_POS               5:3
 
 // For the on-chip device access requests(addr starts with 0xe), 
- // address has specific fields for x, y, and fbits
- `define ON_CHIP_DEV_X_POS       31:28
- `define ON_CHIP_DEV_Y_POS       27:24
- `define ON_CHIP_DEV_FBITS       23:20
+// address has specific fields for x, y, and fbits
+`define ON_CHIP_DEV_X_POS       31:28
+`define ON_CHIP_DEV_Y_POS       27:24
+`define ON_CHIP_DEV_FBITS       23:20
+
 
 // Packet format for home id
 `define PACKET_HOME_ID_WIDTH        (`NOC_CHIPID_WIDTH+`NOC_X_WIDTH+`NOC_Y_WIDTH)
@@ -490,10 +508,12 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 `define BIST_ID_L2_TAG          8'd16
 `define BIST_ID_INVALID         8'b1111_1110
 `define BIST_ID_BROADCAST       8'b1111_1111
+// BIST ID [7:6] == 2'b10 is reserved for FUSE address setting. 
 
 `define BIST_OP_WIDTH 4
 `define BIST_OP_READ 4'd1
 `define BIST_OP_WRITE 4'd2
+`define BIST_OP_READ_EFUSE 4'd8
 `define BIST_OP_WRITE_EFUSE 4'd3
 `define BIST_OP_SHIFT_DATA 4'd4
 `define BIST_OP_SHIFT_ADDRESS 4'd5
@@ -517,6 +537,8 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 `define JTAG_CORE_ID_IRF                    4'd6
 `define JTAG_CORE_ID_IFU_BREAKPOINT_PC      4'd7
 `define JTAG_CORE_ID_IFU_ICACHE_EN          4'd8
+`define JTAG_CORE_ID_DMI                    4'd9
+`define JTAG_CORE_ID_RPC                    4'd10
 
 // Execution Drafting Synchronization Method Values
 `define ED_STSM             2'b00
@@ -573,9 +595,22 @@ print("`define PITON_Y_TILES %d"   % PITON_Y_TILES)
 `define CFG_CSM_ITLB_DEFAULT     64'b0
 `define CFG_CSM_DTLB_DEFAULT     64'b0
 
-`define SPARC_TILE       0
-`define PICORV32_TILE    1
-`define ARIANE_RV64_TILE 2
+`define SPARC_TILE              0
+`define PICORV32_TILE           1
+`define ARIANE_RV64_TILE        2
+`define NIBBLER_TILE            3
+`define DECADES_IS_TILE         4
+`define DECADES_ACC_SORT_TILE   5
+`define PRGA_TILE               6
+`define DECADES_ACC_GEMM_TILE   7
+`define DECADES_ACC_CONV2D_TILE 8
+
+// PRGA CTRL tile placement
+<%
+print("`define PRGA_CTRL_X_TILE `NOC_X_WIDTH'd%s" % PRGA_CTRL_X_TILE)
+print("`define PRGA_CTRL_Y_TILE `NOC_Y_WIDTH'd%s" % PRGA_CTRL_Y_TILE)
+print("`define PRGA_CTRL_FLATID `HOME_ID_WIDTH'd%s" % (PRGA_CTRL_Y_TILE*PITON_X_TILES + PRGA_CTRL_X_TILE))
+%>
 
 `endif
 

@@ -1,2 +1,9 @@
 bootrom/baremetal/bootrom.sv
 bootrom/linux/bootrom_linux.sv
+rv_plic/rtl/reg_intf_pkg.sv
+rv_plic/rtl/rv_plic_reg_pkg.sv
+rv_plic/rtl/rv_plic_target.sv
+rv_plic/rtl/rv_plic_gateway.sv
+rv_plic/rtl/plic_regmap.sv
+rv_plic/rtl/plic_top.sv
+

@@ -52,8 +52,8 @@ module jtag_ctap(
     input wire [`JTAG_SCRATCH_WIDTH-1:0] jtag_ctap_data,
     input wire jtag_ctap_reg_wr_en,
     input wire [`CTAP_REG_SEL_WIDTH-1:0] jtag_ctap_reg_sel,
-    output reg [`JTAG_SCRATCH_WIDTH-1:0] ctap_jtag_data,
-    output reg ctap_jtag_interrupt_bit,
+    output wire [`JTAG_SCRATCH_WIDTH-1:0] ctap_jtag_data,
+    output wire ctap_jtag_interrupt_bit,
 
     // UCB out interface
     output reg ctap_ucb_tx_val,
@@ -72,8 +72,8 @@ module jtag_ctap(
     // output reg [`BIST_OP_WIDTH-1:0] ctap_oram_bist_command,
     // output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] ctap_oram_bist_data,
     // input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] oram_ctap_sram_data,
-    output reg [127:0] ctap_clk_en,
-    output reg ctap_oram_clk_en
+    output wire [127:0] ctap_clk_en,
+    output wire ctap_oram_clk_en
     );
 
 // Data registers
@@ -96,18 +96,13 @@ reg interrupt_bit_next;
 // reg jtag_tiles_val;
 // reg [`CTAP_UCB_PACKET_WIDTH-1:0] tiles_jtag_data;
 // reg tiles_jtag_val;
-reg response_interrupt_en;
 reg clear_interrupt_en;
-reg capture_ucb_data_en;
 
 reg [127:0] ctap_clk_en_reg;
 reg [127:0] ctap_clk_en_reg_next;
 reg ctap_oram_clk_en_reg;
 reg ctap_oram_clk_en_reg_next;
 
-// renaming
-reg [`CTAP_UCB_PACKET_WIDTH-1:0] rtap_packet;
-reg rtap_val;
 // oram
 reg capture_oram_response;
 reg capture_oram_response_next;
@@ -149,6 +144,7 @@ begin
     data_reg_wr_en = 0;
     inst_wr_en = 0;
     addr_wr_en = 0;
+    data_reg_next = data_reg;
 
     if (jtag_ctap_reg_wr_en)
     begin
@@ -160,21 +156,13 @@ begin
             addr_wr_en = 1'b1;
     end
 
-
     // wren for data_reg
     if (data_reg_wr_en)
-    begin
-        data_reg_next = 0;
-        data_reg_next[63:0] = jtag_ctap_data[63:0]; // data is only 64b for transmission
-    end
-    else if (capture_ucb_data_en)
-        data_reg_next[`JTAG_DATA_RES_WIDTH-1:0] = rtap_packet[`JTAG_DATA_RES_WIDTH-1:0];
-    // else if (capture_ucb_64b_en)
-    //     data_reg_next[`JTAG_DATA_RES_WIDTH-1:0] = rtap_packet[`RTAP_RET_DATA_MASK];
+        data_reg_next = {64'd0, jtag_ctap_data[63:0]}; // data is only 64b for transmission
+    else if (ctap_ucb_rx_val)
+        data_reg_next = ctap_ucb_rx_data;
     else if (capture_oram_response)
         data_reg_next = oram_ctap_res_data;
-    else
-        data_reg_next = data_reg;
 
     // wren for jtag_req reg
     if (inst_wr_en)
@@ -283,42 +271,22 @@ begin
     // ctap_packet_vec = `CTAP_REQ_VEC_WHOLE_PACKET;
 end
 
-// handle returns from RTAP
-reg ret_val;
-always @ *
-begin
-    ret_val = rtap_val;
-
-    capture_ucb_data_en = 1'b0;
-    response_interrupt_en = 1'b0;
-
-    if (ret_val)
-    begin
-        response_interrupt_en = 1'b1;
-        capture_ucb_data_en = 1'b1;
-    end
-end
-
 // interrupt bit logic
 always @ *
 begin
     interrupt_bit_next = interrupt_bit;
-    if (response_interrupt_en)
+    if (ctap_ucb_rx_val)
         interrupt_bit_next = 1'b1;
     else if (clear_interrupt_en)
         interrupt_bit_next = 1'b0;
-
-    // setting output reg
-    ctap_jtag_interrupt_bit = interrupt_bit;
-    ctap_clk_en = ctap_clk_en_reg;
-    ctap_oram_clk_en = ctap_oram_clk_en_reg;
 end
+// setting output reg
+assign ctap_jtag_interrupt_bit = interrupt_bit;
+assign ctap_clk_en = ctap_clk_en_reg;
+assign ctap_oram_clk_en = ctap_oram_clk_en_reg;
 
 // ctap-jtag read interface
-always @ *
-begin
-    ctap_jtag_data = data_reg;
-end
+assign ctap_jtag_data = data_reg;
 
 // broadcast interface
 always @ *
@@ -326,13 +294,6 @@ begin
     ctap_ucb_tx_val = ctap_packet_val;
     ctap_ucb_tx_data = ctap_packet;
     ctap_ucb_tx_data_vec = ctap_packet_vec;
-end
-
-// receiving interface
-always @ *
-begin
-    rtap_packet = ctap_ucb_rx_data;
-    rtap_val = ctap_ucb_rx_val;
 end
 
 // unused ORAM sram ports

@@ -74,9 +74,11 @@ def usage():
     print("                  pico      (32bit RISCV core)", file=sys.stderr)
     print("                  pico_het  (heterogeneous pico+sparc arrangement)", file=sys.stderr)
     print("                  ariane    (64bit RISCV core)", file=sys.stderr)
+    print("                  decoupling(ariane core and IS tile)", file=sys.stderr)
     print("\n       --network_config <network_config>", file=sys.stderr)
     print("              Name of the network type to be used:", file=sys.stderr)
-    print("                  2dmesh_config (default)", file=sys.stderr)
+    print("                  pyocn_router_config (default)", file=sys.stderr)
+    print("                  2dmesh_config", file=sys.stderr)
     print("                  xbar_config", file=sys.stderr)
     print("\n       --x_tiles <number>", file=sys.stderr)
     print("       --y_tiles <number>", file=sys.stderr)
@@ -445,7 +447,7 @@ def setParserOptions(parser):
     parser.add_option("-b", "--board", dest="board", action="store")
     parser.add_option("-d", "--design", dest="design", action="store", default="system")
     parser.add_option("-c", "--core", dest="core", action="store", default="sparc")
-    parser.add_option("--network_config", dest="network_config", action="store", default="2dmesh_config")
+    parser.add_option("--network_config", dest="network_config", action="store", default="pyocn_router_config")
     parser.add_option("--x_tiles", dest="x_tiles", action="store", default=1)
     parser.add_option("--y_tiles", dest="y_tiles", action="store", default=1)
     parser.add_option("--num_tiles", dest="num_tiles", action="store", default=1)
@@ -490,8 +492,14 @@ def makeDefList(options):
     #defines.append(df)
 
     # disable CSM in this case
-    if options.core == 'ariane':
+    if (options.core == 'ariane'):
         defines.append("NO_RTL_CSM")
+
+    # For now, add PITON_L2_64B_RESP_ONLY as a default setting. 
+    # will remove that after the mc support 8B request.
+    if (options.core == 'decoupling') :
+        defines.append("NO_RTL_CSM")
+        defines.append("PITON_L2_64B_RESP_ONLY")
 
     if (options.board == "f1"):
         print_info("design option is ignored for f1")
@@ -728,6 +736,21 @@ def main():
     os.environ['PITON_Y_TILES']   = str(options.y_tiles)
     os.environ['PITON_NUM_TILES'] = str(options.num_tiles)
 
+    rv64_x_tiles = options.x_tiles
+    rv64_y_tiles = options.y_tiles
+    if (options.core == 'decoupling'):
+        rv64_num_tiles = options.num_tiles - int((options.num_tiles+2)/4) 
+        # TODO: this is a temporary setting 
+        rv64_x_tiles = rv64_num_tiles
+        rv64_y_tiles = 1
+    elif (options.core == 'ariane'):
+        rv64_num_tiles = options.num_tiles
+    else:
+        rv64_num_tiles = 0 
+    os.environ['PITON_RV64_TILES'] = str(rv64_num_tiles)
+    os.environ['PITON_RV64_X_TILES'] = str(rv64_x_tiles)
+    os.environ['PITON_RV64_Y_TILES'] = str(rv64_y_tiles)
+
     # core variant
     print_info("core      = " + str(options.core))
     for i in range(int(options.num_tiles)):
@@ -756,11 +779,12 @@ def main():
                 os.environ['RTL_SPARC' + str(i)] = "1"
                 print_info('setenv RTL_SPARC' + str(i))
 
-    elif options.core == 'ariane':
+    elif options.core == 'ariane' or options.core == 'decoupling':
         os.environ['PITON_ARIANE'] = "1"
         os.environ['PITON_RV64_PLATFORM'] = "1"
         os.environ['WT_DCACHE']    = "1"
 
+        # TODO is this removable? RTL_ARIANE is only used in RTL simulation  
         for i in range(int(options.num_tiles)):
             os.environ['RTL_ARIANE' + str(i)] = "1"
             print_info('setenv RTL_ARIANE' + str(i))
@@ -776,8 +800,12 @@ def main():
         print_error("invalid core configuration " + str(options.core))
         sys.exit(1)
 
+    # Decoupling config
+    if options.core == 'decoupling':
+        os.environ['DECADES_DECOUPLING'] = "1"
+
     # network config
-    if options.network_config not in ['2dmesh_config', 'xbar_config']:
+    if options.network_config not in ['pyocn_router_config', '2dmesh_config', 'xbar_config']:
         print_error('invalid network config ' + str(options.network_config))
         sys.exit(1)
 
@@ -846,6 +874,9 @@ def main():
         if options.core == 'ariane':
             config += ' -ariane'
 
+        if options.core == 'decoupling':
+            config += ' -ariane -decoupling'
+
         print_info("Synthesizing a test: %s" % options.test_name)
         print_info("Compilation started")
         ret_val = os.system('sims -sys=manycore' + config + ' -vcs_build -vcs_build_args=+libext+.v -vcs_build_args=-Mupdate > %s/compilation.log' % rc_dir.log)
@@ -897,7 +928,6 @@ def main():
         jid = makeProject(options.board, design_data, rc_dir.work, rc_dir.log, options.slurm, None)
         if jid != None:
             dep_list.append(jid)
-
 
     ## TODO: update this options for simulations from VCS
     if run_gen_test_bram:

@@ -1,0 +1,121 @@
+// Copyright (c) 2024 Princeton University
+// All rights reserved.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+`ifndef NIBBLER_DESERIALIZED_REG_V
+`define NIBBLER_DESERIALIZED_REG_V
+
+<%
+#import param_Defines as p
+from pyhplib import *
+%>
+
+
+module nibbler_DeserializedSeqLog
+(
+<%
+print("  input clk,")
+for i in range(NIBBLER_C_N_OFF):
+  print("  input subword_"+str(i)+"_en,")
+print("  input ["+str(NIBBLER_P_NBITS-1)+":0] write_data,")
+
+print("  output reg [31:0] out")
+%>
+);
+
+<%
+print('  reg ['+str(NIBBLER_P_NBITS-1)+':0] reg_array['+str(NIBBLER_C_N_OFF-1)+':0];')
+for i in range(NIBBLER_C_N_OFF):
+  print("  // Subword "+str(i)+" Sequential")
+  print("  always @ (posedge clk) begin")
+  print("    reg_array["+str(i)+"] <= subword_"+str(i)+"_en ? write_data : reg_array["+str(i)+"];")
+  print("  end")
+  print("")
+%>
+
+  // Concatenate register array for convenience later
+  always @(*) begin
+    out = {
+<%
+for i in range(NIBBLER_C_N_OFF-1,0,-1):
+  print("    reg_array["+str(i)+"],")
+print("    reg_array[0]")
+%>    };
+  end
+
+endmodule
+
+module nibbler_DeserializedReg
+(
+  input reset,
+  input clk,
+
+<%
+print('  input ['+str(NIBBLER_C_OFFBITS-1)+':0] subword_en_idx,')
+print('  input ['+str(NIBBLER_P_NBITS-1)+':0] data_in,')
+%>
+  output reg [31:0] out
+);
+
+<%
+print('  wire ['+str(NIBBLER_P_NBITS-1)+':0] write_data = reset ? '+ str(NIBBLER_P_NBITS) +'\'b0 : data_in;')
+%>
+
+// Convert subword enable index to one-hot enable signal
+<%
+print('reg ['+str(NIBBLER_C_N_OFF-1)+':0] subword_off_en;')
+%>
+always @(*) begin
+<%
+print('  subword_off_en = '+str(NIBBLER_C_N_OFF)+'\'b0;')
+%>
+  case (subword_en_idx)
+<%
+for i in range(NIBBLER_C_N_OFF):
+  print('    '+ str(NIBBLER_C_OFFBITS) +'\'d'+str(i)+': subword_off_en['+str(i)+'] = 1\'b1;')
+print('    default: subword_off_en = '+str(NIBBLER_C_N_OFF)+'\'b0;')
+%>
+  endcase
+end
+
+wire[31:0] seq_log_out;
+nibbler_DeserializedSeqLog seq_log
+(
+<%
+print("  .clk (clk),")
+for i in range(NIBBLER_C_N_OFF):
+  print("  .subword_"+str(i)+"_en (subword_off_en["+str(i)+"]),")
+print("  .write_data (write_data),")
+print("  .out (seq_log_out)")
+%>
+);
+
+
+always @(*) begin
+  out = seq_log_out;
+end
+
+
+endmodule
+
+`endif

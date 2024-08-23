@@ -32,6 +32,8 @@
 bram_map.v
 ciop_iob.v
 eth_top.v
+// Kaifeng:
+int_pkt_gen.v
 // storage_addr_trans.v
 //uart_mux.v
 //uart_reader.v

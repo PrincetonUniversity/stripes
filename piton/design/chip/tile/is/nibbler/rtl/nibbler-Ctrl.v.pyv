@@ -1,0 +1,1441 @@
+// Copyright (c) 2024 Princeton University
+// All rights reserved.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of the copyright holder nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+// Inspired by a design from the Batten Research Group at Cornell University
+
+`ifndef NIBBLER_CTRL_V
+`define NIBBLER_CTRL_V
+
+<%
+import os
+import sys
+sys.path.append(os.getcwd())
+
+from pyhplib import *
+#import param_microcode as mc
+%>
+
+module nibbler_Ctrl
+(
+      
+  input        clk,
+  input        reset,
+  input        nibbler_csr_int,
+  input        nibbler_int,
+       
+  output       imemreq_val,
+  input        imemreq_rdy,
+  input [31:0] imemresp_msg_data,
+  input        imemresp_val,
+  output       imemresp_rdy,
+
+      // Data Memory Port
+  output       dmemreq_msg_rw,
+  output [1:0] dmemreq_msg_len,
+  output       dmemreq_signed,
+  output reg   dmemreq_val,
+  input        dmemreq_rdy,
+  input        dmemresp_val,
+  output       dmemresp_rdy,
+
+  output       vector_memop_Xhl,
+  output       spmemreq_rw,
+  output       spmemreq_val,
+  input        spmemreq_rdy,
+  output reg   sp_handshake_prev,
+
+  output reg   csr_read_en_Xhl,
+  output reg   csr_write_en_Xhl,
+  input        csr_ext_mem_mode,
+
+  // ctrl -> dpath
+  // --------------
+  output reg [31:0] ir,
+  output reg        pc_mux_sel_Xhl,
+  output reg        pc_plus4_mux_sel_Xhl,
+
+  // Register FIle Interfaces
+  output reg [4:0]  rega_addr_Rhl,
+  output reg [4:0]  regb_addr_Rhl,
+  output reg [4:0]  wb_addr_Xhl,
+  output reg        wb_en_Xhl,
+  output reg        v_wb_en_Xhl,
+  output reg        vm_reg_en_Xhl,
+  output            masking_en_Xhl,
+  output reg        sp_subword_incr_Xhl,
+  output reg        wb_to_addr_Xhl,
+  output reg        wb_to_data_Xhl,
+ 
+
+  // ALU Inputs 
+  `ifdef NIBBLER_VECTOR_SHIFT 
+  output reg        shamt_reg_en_Xhl,
+  output            shamt_mux_sel_Xhl,
+  output reg        adj_sw_mux_sel_Xhl,
+  output reg        adj_sw_reg_en_Xhl,
+  output reg        a_offset_mux_sel_Rhl,
+  output reg        a_offset_mux_sel_Xhl,
+
+  output     [4:0]  shamt_imm_Xhl,
+  output            shift_inst_dir_Xhl,
+  output reg        a_rd_tmp_Xhl,
+  `endif
+  output reg        a_mux_sel_Xhl,
+<%
+print('  output reg ['+str(NIBBLER_P_NBITS-1)+':0]  b_imm_Xhl,')
+%>
+  output reg        b_mux_sel_Xhl,
+ 
+<%
+print('  output reg ['+str(NIBBLER_C_OFFBITS-1)+':0]  a_subword_off_Rhl,')
+print('  output reg ['+str(NIBBLER_C_OFFBITS-1)+':0]  b_subword_off_Rhl,')
+print('  output reg ['+str(NIBBLER_C_OFFBITS-1)+':0]  wb_subword_off_Xhl,')
+%>
+
+  output reg        addsub_fn_Xhl,
+  output reg [1:0]  logic_fn_Xhl,
+  output reg [1:0]  alu_fn_type_Xhl,
+
+
+  output reg        prop_flag_Xhl,
+  output reg        carry_in_1_Xhl,
+  output reg        flag_reg_en_Xhl,
+       
+  output reg        addr_shift_dir_sel_Xhl,
+  output reg        addr_reg_en_Xhl,
+
+  output reg        last_uop_Xhl,
+  output reg        br_reg_en_Xhl,
+  output     [2:0]  br_type_Xhl,
+
+  input             b_use_imm_reg_Xhl,
+  input      [31:0] proc2cop_data_Xhl,
+
+  output reg        vl_reg_en_Xhl,
+
+  output reg [31:0] cp0_status
+
+);
+
+<%
+print('  localparam NIBBLER_P_NLANES = '+str(NIBBLER_P_NLANES)+';')
+print('  localparam NIBBLER_C_OFFBITS = '+NIBBLER_C_OFFBITS_STR+';')
+%>
+
+  // RISCV Architectural Registers
+  
+  wire [4:0]  rs1;
+  wire [4:0]  rs2;
+  wire [4:0]  rd;
+  wire [4:0]  uop_repeat_Dhl;
+
+  assign rs1 = ir[19:15];
+  assign rs2 = ir[24:20];
+  assign rd  = ir[11:7];
+
+  
+
+  // ------------------------
+  // Instruction Fetch Logic
+  // ------------------------
+  reg new_instr_req;
+  reg instr_req_pending;
+  reg [4:0] repeat_ctr_reg;
+  reg [9:0] uop_idx;
+  
+  // We are always ready to accept a new instruction
+  // because we only request when we are ready
+  assign imemreq_val = new_instr_req;
+  assign imemresp_rdy = instr_req_pending;
+
+  // Set up micr-op repeat logic
+  reg dmemreq_pending_next;
+  reg spmemreq_pending_next;
+  wire stall_memreq = dmemreq_pending_next || spmemreq_pending_next;
+
+  reg first_cycle_of_uop;
+  wire [4:0] repeat_mux_out = first_cycle_of_uop ? uop_repeat_Dhl : (repeat_ctr_reg - 1);
+  wire repeat_ctr_reg_en = (!stall_memreq) && (first_cycle_of_uop || (repeat_ctr_reg != 5'b0));
+  wire [4:0] repeat_ctr_next = repeat_ctr_reg_en ? repeat_mux_out : repeat_ctr_reg;
+
+  // Indicate when a new instruction fetch is being handled by the instruction memory.
+  reg instr_req_pending_next;
+  always @(*) begin
+    instr_req_pending_next = instr_req_pending;
+    if (imemresp_val && imemresp_rdy) begin
+      instr_req_pending_next = 1'b0; 
+    end else if (imemreq_val && imemreq_rdy) begin
+      instr_req_pending_next = 1'b1;
+    end
+  end
+
+  // Update uop index on a new instruction fetch or when repeat counter hits 0.
+  reg [9:0] uop_idx_next;
+  reg done_fetch;
+  always @(*) begin
+    uop_idx_next = uop_idx;
+    if ((imemreq_val && imemreq_rdy) || (imemresp_val && imemresp_rdy)) begin
+      uop_idx_next = 10'b0;
+    end
+    else if (new_instr_req || instr_req_pending || done_fetch) begin
+      uop_idx_next = 10'h3ff;
+    end
+    else if (repeat_mux_out == 5'b0 && !stall_memreq) begin
+      uop_idx_next = uop_idx + 10'b1;
+    end
+  end
+
+  // Indicate first cycle of a (possibly) repeated uo 
+  // This is when there's a newly-fetched instruction or the uop repeat counter hits 0
+  reg first_cycle_of_uop_next;
+  always @(*) 
+  begin
+    first_cycle_of_uop_next = first_cycle_of_uop;
+    if (imemresp_val && imemresp_rdy) begin
+      first_cycle_of_uop_next = 1'b1;
+    end else begin
+      first_cycle_of_uop_next = (repeat_mux_out == 5'b0);
+    end
+  end
+
+  // Update IR when imem responds with a valid instruction
+  reg [31:0] ir_next;
+  wire        last_uop_Dhl;
+  always @(*)
+  begin
+    ir_next = ir;
+    if (imemresp_val && imemresp_rdy) begin
+      ir_next = imemresp_msg_data;
+    end 
+  end
+
+  // Indicate when done fetching/decoding and to switch to default control signal
+  // Clear when a new fetch request is sent to memory.
+  reg done_fetch_next;
+  always @ (*) 
+  begin
+    done_fetch_next = done_fetch;
+    if (!new_instr_req && last_uop_Dhl && !stall_memreq) begin
+      done_fetch_next = 1'b1;
+    end else if (new_instr_req) begin
+      done_fetch_next = 1'b0;
+    end
+  end
+
+
+  // Indicate when to fetch the next instruction
+  // Must be when current instruction's last uop is in the X stage
+  reg new_instr_req_next;
+  always @(*)
+  begin
+    new_instr_req_next = new_instr_req;
+    if (imemreq_val && imemreq_rdy) begin
+      new_instr_req_next = 1'b0;
+    end else if (last_uop_Xhl || nibbler_int || nibbler_csr_int) begin
+      new_instr_req_next = 1'b1;
+    end
+  end
+
+  always @(posedge clk) begin
+    if (reset) begin
+      // Upon a reset, prepare to request a new instruction
+      new_instr_req <= 1'b1;
+      instr_req_pending <= 1'b0;
+      ir <= 32'b0;
+      uop_idx <= 10'b0;
+      repeat_ctr_reg <= 5'b0;
+      done_fetch <= 1'b0;
+    end else begin
+      // Update sequential state
+      instr_req_pending <= instr_req_pending_next;
+      uop_idx <= uop_idx_next;
+      first_cycle_of_uop <= first_cycle_of_uop_next;
+      ir <= ir_next;
+      repeat_ctr_reg <= repeat_ctr_next;
+      new_instr_req <= new_instr_req_next;
+      done_fetch <=  done_fetch_next;
+    end
+  end
+<%
+print('  localparam cs_sz        = '+str(NIBBLER_N_CTRL_SIGNALS + (3 * NIBBLER_C_OFFBITS))+';')
+%>
+  localparam rep_const    = 2'b00; // Repeat uop as defined in microcode
+  localparam rep_reg      = 2'b01; // Repeat uop as defined in temp_reg[5:0] for register-based shifts
+  localparam rep_imm      = 2'b10; // Repeat uop as defined in shamt section of IR for imm. shifts
+
+  localparam csr_x        = 2'b00;
+  localparam csr_r        = 2'b01;
+  localparam csr_w        = 2'b10;
+
+  localparam pc_x         = 1'b0;   //x;       
+  localparam pc_n         = 1'b0;   // Indicate take next PC (= PC+4) 
+  localparam pc_b         = 1'b1;   // Indicate to take calculated PC (shift register) if a branch is taken
+
+  localparam am_r         = 2'b00;  // Indicate to use A as input
+  localparam am_p         = 2'b01;  // Indicate to use PC as the A input
+  localparam am_pcp       = 2'b11;  // Indicate to use PC+4 as A input
+
+  localparam l2m          = 1'b0;   // Access words from LSB to MSB
+  localparam m2l          = 1'b1;   // Access words from MSB to LSB
+  localparam addr_x       = 5'b0;   // Invalid register address; default to 0
+  localparam r0           = 5'h0;
+  localparam r31          = 5'h1f;
+  localparam n            = 1'b0;         
+  localparam y            = 1'b1;
+
+  localparam immed_type_i = 3'b000;
+  localparam immed_type_s = 3'b001;
+  localparam immed_type_b = 3'b010;
+  localparam immed_type_u = 3'b011;
+  localparam immed_type_j = 3'b100;
+  localparam immed_type_x = 3'b111;  // Does not correspond to a particular type
+
+  localparam b_imm_shft   = 1'b0;
+  localparam b_imm_load   = 1'b1;
+  localparam b_imm_x      = 1'b0;    //x;
+  localparam bm_imm       = 1'b0;
+
+  localparam bm_reg       = 1'b1;
+
+  localparam fn_add       = 1'b0;
+  localparam fn_sub       = 1'b1;
+  localparam fn_and       = 2'b11;
+  localparam fn_or        = 2'b10;
+  localparam fn_a_nb      = 2'b01;
+  localparam fn_xor       = 2'b00;
+  localparam fn_shift_zero= 2'b00; 
+
+  localparam adj_x        = 1'b0;
+  localparam adj_subw     = 1'b0;
+  localparam adj_sext     = 1'b1;
+
+  localparam fn_sxl       = 2'b01; // Logical shift
+  localparam fn_sxa       = 2'b11; // Arithmetic shift
+
+  localparam carry_msb    = 2'b11; // Propagate old MSB to new carry-in signal
+  localparam carry_prop   = 2'b10; // Propagate old carry out to new carry in
+  localparam carry_in_1   = 2'b01; // Set carry in of Addsub to 1 
+  localparam carry_in_0   = 2'b00; // Set carry in of addsub to 0
+
+  localparam fn_type_arith= 2'b00;
+  localparam fn_type_jalr = 2'b11; // Corner case for & fffe for JARL sum
+  localparam fn_type_logic= 2'b01;
+  localparam fn_type_shift= 2'b10;
+  localparam fn_type_x    = 2'b00; //x;
+
+  localparam fn_x         = 8'b0;  //x;
+  localparam fn_zero      = 8'b0;
+  localparam shift_left   = 1'b0;
+  localparam shift_right  = 1'b1;  
+  localparam zero         = 1'b0;
+
+  wire [cs_sz-1:0] lui_microcode[2:0];
+
+<%
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = 0
+opidx = mc.gen_lines( opidx,                 0,'lui_microcode',   False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'u',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,        'x', False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'lui_microcode',   False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'u',     True,    'shft',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,        'x', False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'lui_microcode',   False,    'x',        'n',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'u',     True,    'shft',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,        'x', False,     False,     True)
+%>
+
+  wire [cs_sz-1:0] auipc_microcode[2:0];
+
+<%
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = 0
+opidx = mc.gen_lines( opidx,                 0,'auipc_microcode', False,    'x',        'x',       'p',    False,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'u',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'auipc_microcode', False,    'x',        'x',       'p',    False,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'u',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'auipc_microcode', False,    'x',        'n',       'p',    False,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'u',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,     True)
+%>
+
+  wire [cs_sz-1:0] jal_microcode[3:0];
+<%
+opidx = 0
+#//                                                            cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// JAL sets LSB to 0
+#// R[rd] = PC + 4; 
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'jal_microcode',  False,    'x',        'x',     'pcp',    False,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+#// PC = ( R[rs1] + sext(imm) ) & 0xfffffffe
+opidx = mc.gen_lines( opidx,                 0,'jal_microcode',  False,    'x',        'x',       'p',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'j',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x',  'jalr',  True,  'right',    True,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'jal_microcode',  False,    'x',        'x',       'p',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'j',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,  'right',    True,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'jal_microcode',  False,    'x',        'b',       'p',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'j',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,  'right',    True,     False,     True)
+%>
+
+
+  wire [cs_sz-1:0] jalr_microcode[3:0];
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// JALR sets LSB to 0
+#// R[rd] = PC + 4; 
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'jalr_microcode',  False,    'x',        'x',     'pcp',    False,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+#// PC = ( R[rs1] + sext(imm) ) & 0xfffffffe
+opidx = mc.gen_lines( opidx,                 0,'jalr_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x',  'jalr',  True,  'right',    True,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'jalr_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,  'right',    True,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'jalr_microcode',  False,    'x',        'b',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,  'right',    True,     False,     True)
+%>
+
+wire [cs_sz-1:0] bne_microcode[5:0];
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+# // Compare inputs. Propagate |(A[i]^B[i])
+opidx = mc.gen_lines( opidx,                 0,'bne_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',     'x',   False, False,     False,      False,     False,         False,      'reg',        'x',    False,       'x',       True,       'x',      '0',    'xor',     'x',  False,        'x', 'logic',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'bne_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',     'x',   False, False,     False,      False,     False,         False,      'reg',        'x',    False,       'x',       True,       'x',   'prop',    'xor',     'x',  False,        'x', 'logic',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'bne_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',     'x',   False, False,     False,      False,     False,         False,      'reg',        'x',    False,       'x',       True,       'x',   'prop',    'xor',     'x',  False,        'x', 'logic',  True,      'x',   False,      True,    False)
+# // Add appropriate offset to PC to get correct result.
+opidx = mc.gen_lines( opidx,                 0,'bne_microcode',   False,    'x',        'x',       'p',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'b',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,  'right',    True,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'bne_microcode',   False,    'x',        'x',       'p',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'b',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,  'right',    True,     False,    False)
+# // Load the result into the next PC
+opidx = mc.gen_lines( opidx,                 0,'bne_microcode',   False,    'x',        'b',       'p',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'b',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,  'right',    True,     False,     True)
+%>
+                                  
+  wire [cs_sz-1:0] addi_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'addi_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'addi_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'addi_microcode',  False,    'x',        'n',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+ wire [cs_sz-1:0] xori_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'xori_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'xori_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'xori_microcode',  False,    'x',        'n',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+
+ wire [cs_sz-1:0] ori_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'ori_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'ori_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'ori_microcode',   False,    'x',        'n',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+ wire [cs_sz-1:0] andi_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'andi_microcode',  False,    'x',        'x',       'r',    False,      'l2m', ' rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'andi_microcode',  False,    'x',        'x',       'r',    False,      'l2m', ' rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'andi_microcode',  False,    'x',        'n',       'r',    False,      'l2m', ' rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+  wire [cs_sz-1:0] add_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'add_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'add_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'add_microcode',   False,    'x',        'n',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,     True)
+%>
+
+
+  wire [cs_sz-1:0] sub_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'sub_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'sub',      '1',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'sub_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'sub',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'sub_microcode',   False,    'x',        'n',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'sub',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,     True)
+%>
+
+
+  wire [cs_sz-1:0] slt_microcode[5:0];
+
+<%
+opidx = 0
+#// Perform subtraction. Make sure the last computation enables the flag register
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'slt_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',     'x',   False, False,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'sub',      '1',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'slt_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',     'x',   False, False,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'sub',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'slt_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',     'x',   False, False,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,     'sub',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+#// Then add 0 + 0 + MSB(old) to output register
+opidx = mc.gen_lines( opidx,                 0,'slt_microcode',   False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',    'msb',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'slt_microcode',   False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'slt_microcode',   False,    'x',        'n',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,     True)
+
+%>
+
+
+ wire [cs_sz-1:0] slti_microcode[5:0];
+
+<%
+opidx = 0
+#// Perform subtraction. Make sure the last computation enables the flag register
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'slti_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'sub',      '1',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'slti_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'sub',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'slti_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'sub',   'prop',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+#// Then add 0 + 0 + MSB(old) to output register
+opidx = mc.gen_lines( opidx,                 0,'slti_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',    'msb',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'slti_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'slti_microcode',  False,    'x',        'n',       'r',    False,      'l2m',   'r0',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,     True)
+
+%>
+
+ wire [cs_sz-1:0] xor_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'xor_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'xor_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'xor_microcode',   False,    'x',        'n',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+
+ wire [cs_sz-1:0] or_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'or_microcode',    False,    'x',        'x',       'r',    False,      'l2m', 'rs1',   'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'or_microcode',    False,    'x',        'x',       'r',    False,      'l2m', 'rs1',   'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'or_microcode',    False,    'x',        'n',       'r',    False,      'l2m', 'rs1',   'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+ wire [cs_sz-1:0] and_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'and_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'and_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'and_microcode',   False,    'x',        'n',       'r',    False,      'l2m',  'rs1',  'rs2',    'rd',   False,  True,     False,      False,     False,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+
+
+
+
+wire [cs_sz-1:0] csrw_microcode[1:0];
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'csrw_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,       'x',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,  'right',    True,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'csrw_microcode',   True,    'x',        'n',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',     True,       'x',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,  'right',    True,     False,     True)
+%>
+
+`ifdef NIBBLER_VECTOR_SHIFT
+wire [cs_sz-1:0] srai_microcode[7:0];
+<%
+opidx = 0
+#// TODO: Account for when RS1 and RD are the same
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Set shamt registers
+opidx = mc.gen_lines( opidx,                 0,'srai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,          True,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Set the MSB flag to be MSB of input //TODO: Optimize this away
+opidx = mc.gen_lines( opidx,                 0,'srai_microcode',  False,    'x',        'x',       'r',    False,      'm2l',  'rs1',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+#// Initialize adj_sw_sh_reg_Xh to sext(in) and perform subword-level shifting
+opidx = mc.gen_lines( opidx,                 0,'srai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'sext',   True,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'srai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',  False,     'subw', 'shift', False,      'x',   False,     False,    False)
+#// Delay one cycle to ensure all subwords have written back to RF
+opidx = mc.gen_lines( opidx,                 0,'srai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Perform bitwise shifting
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'srai_microcode',  False,    'x',        'x',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'srai_microcode',  False,    'x',        'n',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,     True)
+%>
+
+wire [cs_sz-1:0] srli_microcode[7:0];
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Set shamt registers
+opidx = mc.gen_lines( opidx,                 0,'srli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,          True,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Initialize adj_sw_sh_reg_Xh to 0 and perform subword-level shifting
+opidx = mc.gen_lines( opidx,                 0,'srli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'srli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',  False,     'subw', 'shift', False,      'x',   False,     False,    False)
+#// Delay one cycle to ensure all subwords have written back to RF
+opidx = mc.gen_lines( opidx,                 0,'srli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Perform bitwise shifting
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'srli_microcode',  False,    'x',        'x',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'srli_microcode',  False,    'x',        'n',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,     True)
+%>
+
+wire [cs_sz-1:0] slli_microcode[7:0];
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Set shamt registers
+opidx = mc.gen_lines( opidx,                 0,'slli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,          True,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Initialize adj_sw_sh_reg_Xh to 0 and perform subword-level shifting
+opidx = mc.gen_lines( opidx,                 0,'slli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'slli_microcode',  False,    'x',        'x',       'r',    False,      'm2l',  'rs1',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',  False,     'subw', 'shift', False,      'x',   False,     False,    False)
+#// Delay one cycle to ensure all subwords have written back to RF
+opidx = mc.gen_lines( opidx,                 0,'slli_microcode',  False,    'x',        'x',       'r',    False,      'm2l',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Perform bitwise shifting
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'slli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'slli_microcode',  False,    'x',        'n',       'r',    False,      'l2m',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,     True)
+%>
+
+`endif
+
+
+
+<%
+print('wire [cs_sz-1:0] load_microcode['+str(4+int(NIBBLER_C_N_OFF-1))+':0];')
+#//                                                               cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = 0
+#// Calculate Address
+opidx = mc.gen_lines( opidx,                 0,'load_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'load_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Send First Request
+opidx = mc.gen_lines( opidx,                 0,'load_microcode',    False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',    True, False,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+for i in range(NIBBLER_C_N_OFF-1):
+  #// Increment address and send request for next subword
+  opidx = mc.gen_lines( opidx,               0,'load_microcode',    False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',    'rd',    True,  True,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Final subword is written in response to final request. Indicate done.
+opidx = mc.gen_lines( opidx,                 0,'load_microcode',    False,    'x',        'n',       'r',    False,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+<%
+print('wire [cs_sz-1:0] store_microcode['+str(4+int(NIBBLER_C_N_OFF-1))+':0];')
+#//                                                               cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = 0
+#// Calculate Address
+opidx = mc.gen_lines( opidx,                 0,'store_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        's',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'store_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        's',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Send First Request
+opidx = mc.gen_lines( opidx,                 0,'store_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',     'x',    True, False,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+for i in range(NIBBLER_C_N_OFF-1):
+  #// Increment address and send request for next subword
+  opidx = mc.gen_lines( opidx,               0,'store_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',     'x',    True, False,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Final subword is written in response to final request. Indicate done.
+opidx = mc.gen_lines( opidx,                 0,'store_microcode',    False,    'x',        'n',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+// All loads perform same microcode. Memory response is masked/sign extended in scalar datapath
+wire [cs_sz-1:0] exload_microcode[7:0];
+<%
+opidx = 0
+#//                                                                 cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Calculate Address
+opidx = mc.gen_lines( opidx,                 0,'exload_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'exload_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'exload_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',    True, False,      True,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Handle response from Mem
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'exload_microcode',    False,    'x',        'x',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'exload_microcode',    False,    'x',        'n',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+// All stores perform same microcode. Memory request length is set in memreq_msg_len. Lowest (byte, halfword) alraedy set properly by sw microcode
+wire [cs_sz-1:0] exstore_microcode[7:0];
+<%
+opidx = 0
+#//                                                                  cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Calculate Address
+opidx = mc.gen_lines( opidx,                 0,'exstore_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        's',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'exstore_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        's',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'exstore_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        's',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Deserialize data to be stored
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'exstore_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',     'x',   False, False,     False,      False,      True,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'exstore_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',     'x',    True, False,     False,      False,      True,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Handle response from Mem
+opidx = mc.gen_lines( opidx,                 0,'exstore_microcode',    False,    'x',        'n',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+wire [cs_sz-1:0] csrrw_microcode[6:0];
+<%
+opidx = 0
+#//                                                                 cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Calculate Address of CSR from immediate value 
+opidx = mc.gen_lines( opidx,                 0,'csrrw_microcode',     False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'csrrw_microcode',     False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// load the current CSR value into csr holding register
+opidx = mc.gen_lines( opidx,                 0,'csrrw_microcode',     False,    'r',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',      False,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// Deserialize rs1 into the mem_data_reg
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'csrrw_microcode',     False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,     False,      False,      True,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// Write the CSR
+opidx = mc.gen_lines( opidx,                 0,'csrrw_microcode',     False,    'w',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',      False,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// Write rd
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'csrrw_microcode',     False,    'x',        'x',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'csrrw_microcode',     False,    'x',        'n',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,     True)
+%>
+
+wire [cs_sz-1:0] csrrs_microcode[6:0];
+<%
+opidx = 0
+#//                                                                 cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Calculate Address of CSR from immediate value 
+opidx = mc.gen_lines( opidx,                 0,'csrrs_microcode',     False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'csrrs_microcode',     False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// load the current CSR value into csr holding register
+opidx = mc.gen_lines( opidx,                 0,'csrrs_microcode',     False,    'r',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',      False,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// Deserialize rs1 into the mem_data_reg
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'csrrs_microcode',     False,    'x',        'x',       'r',     True,      'l2m',    'x',  'rs1',     'x',   False, False,     False,      False,      True,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,       'x',  False,     False,    False)
+#// Write the CSR
+opidx = mc.gen_lines( opidx,                 0,'csrrs_microcode',     False,    'w',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',      False,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// Write rd
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'csrrs_microcode',     False,    'x',        'x',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'csrrs_microcode',     False,    'x',        'n',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,     True)
+%>
+
+wire [cs_sz-1:0] csrrc_microcode[6:0];
+<%
+opidx = 0
+#//                                                                 cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Calculate Address of CSR from immediate value 
+opidx = mc.gen_lines( opidx,                 0,'csrrc_microcode',     False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'csrrc_microcode',     False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// load the current CSR value into csr holding register
+opidx = mc.gen_lines( opidx,                 0,'csrrc_microcode',     False,    'r',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',      False,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// Deserialize rs1 into the mem_data_reg
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'csrrc_microcode',     False,    'x',        'x',       'r',     True,      'l2m',    'x',  'rs1',     'x',   False, False,     False,      False,      True,         False,      'reg',        'x',    False,       'x',      False,       'x',      '0',   'a_nb',     'x',  False,        'x', 'logic', False,       'x',  False,     False,    False)
+#// Write the CSR
+opidx = mc.gen_lines( opidx,                 0,'csrrc_microcode',     False,    'w',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',      False,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+#// Write rd
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'csrrc_microcode',     False,    'x',        'x',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'csrrc_microcode',     False,    'x',        'n',       'r',     True,      'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,       'x',  False,     False,     True)
+%>
+
+
+//-------------------------
+// RISC-V Vector Extension
+//-------------------------
+wire [cs_sz-1:0] vsetvli_microcode[4:0];
+
+<%
+
+#//                                                                 cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = 0
+#// 1. Read the value from rs1 and store it into the temp register using wb_addr. This holds the AVL. We don't know the AVL until it's completely loaded.
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'vsetvli_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',    'rd',   False, False,      True,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,        'x', False,     False,    False)
+#// 2. Have the AVL get converted to vl and stored in the vl register and the temporary value register in the scalar datapath. 
+opidx = mc.gen_lines( opidx,                 0,'vsetvli_microcode',   False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,      True,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,        'x', False,     False,    False)
+#// 3. Use the mem_data/temp_value register to input the data and write to rd
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'vsetvli_microcode',   False,    'x',        'x',       'r',    True,       'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,        'x', False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vsetvli_microcode',   False,    'x',        'n',       'r',    True,       'l2m',    'x',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,        'x', False,     False,     True)
+%>
+
+<%
+print('wire [cs_sz-1:0] vle32_v_microcode['+str(3+int(NIBBLER_C_N_OFF-1))+':0];')
+#//                                                                  cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = 0
+#// Load address into addr register
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'vle32_v_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Send First Request
+opidx = mc.gen_lines( opidx,                 0,'vle32_v_microcode',    False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',    True, False,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+for i in range(NIBBLER_C_N_OFF-1):
+  #// Increment address and send request for next subword
+  #// Set rd to correct value so that SP knows where to put data on the cycle after the handshake
+  opidx = mc.gen_lines( opidx,               0,'vle32_v_microcode',    False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',    'rd',    True, False,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Final subword is written in response to final request. Indicate done.
+opidx = mc.gen_lines( opidx,                 0,'vle32_v_microcode',    False,    'x',        'n',       'r',    False,      'l2m',    'x',    'x',    'rd',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+<%
+print('wire [cs_sz-1:0] vse32_v_microcode['+str(3+int(NIBBLER_C_N_OFF-1))+':0];')
+#//                                                                  cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = 0
+#// Load address into addr register
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'vse32_v_microcode',    False,    'x',        'x',       'r',    False,      'l2m',  'rs1',    'x',     'x',   False, False,      True,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Send First Request
+opidx = mc.gen_lines( opidx,                 0,'vse32_v_microcode',    False,    'x',        'x',       'r',    False,      'l2m',   'rd',    'x',     'x',    True, False,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+for i in range(NIBBLER_C_N_OFF-1):
+  #// Increment address and send request for next subword
+  opidx = mc.gen_lines( opidx,               0,'vse32_v_microcode',    False,    'x',        'x',       'r',    False,      'l2m',   'rd',    'x',     'x',    True, False,     False,       True,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+#// Final subword is written in response to final request. Indicate done.
+opidx = mc.gen_lines( opidx,                 0,'vse32_v_microcode',    False,    'x',        'n',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+// Need a separate vector microcode because scalar does operand A=rs1 but VI does A=vs2
+  wire [cs_sz-1:0] vaddi_microcode[2:0];
+// Note: immediate type doesn't matter as it is overridden in the immediate select logic.
+<%
+opidx = 0
+#//                                                              cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'vaddi_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'vaddi_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vaddi_microcode',  False,    'x',        'n',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,     'add',   'prop',      'x',     'x',  False,        'x', 'arith',  True,       'x',  False,     False,     True)
+%>
+
+ wire [cs_sz-1:0] vandi_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                              cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'vandi_microcode',  False,    'x',        'x',       'r',    False,      'l2m', ' rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'vandi_microcode',  False,    'x',        'x',       'r',    False,      'l2m', ' rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vandi_microcode',  False,    'x',        'n',       'r',    False,      'l2m', ' rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'and',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+ wire [cs_sz-1:0] vori_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                              cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'vori_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'vori_microcode',   False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vori_microcode',   False,    'x',        'n',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',     'or',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+ wire [cs_sz-1:0] vxori_microcode[2:0];
+
+<%
+opidx = 0
+#//                                                              cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+opidx = mc.gen_lines( opidx,                 0,'vxori_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'load',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-3,'vxori_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vxori_microcode',  False,    'x',        'n',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'i',     True,    'shft',      False,       'x',      '0',    'xor',     'x',  False,        'x', 'logic', False,      'x',   False,     False,     True)
+%>
+
+wire [cs_sz-1:0] vslli_microcode[7:0];
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Set shamt registers
+opidx = mc.gen_lines( opidx,                 0,'vslli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,          True,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Initialize adj_sw_sh_reg_Xh to 0 and perform subword-level shifting
+opidx = mc.gen_lines( opidx,                 0,'vslli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'vslli_microcode',  False,    'x',        'x',       'r',    False,      'm2l',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',  False,     'subw', 'shift', False,      'x',   False,     False,    False)
+#// Delay one cycle to ensure all subwords have written back to RF
+opidx = mc.gen_lines( opidx,                 0,'vslli_microcode',  False,    'x',        'x',       'r',    False,      'm2l',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Perform bitwise shifting
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'vslli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vslli_microcode',  False,    'x',        'n',       'r',    False,      'l2m',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,     True)
+%>
+
+wire [cs_sz-1:0] vsrli_microcode[7:0];
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Set shamt registers
+opidx = mc.gen_lines( opidx,                 0,'vsrli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,          True,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Initialize adj_sw_sh_reg_Xh to 0 and perform subword-level shifting
+opidx = mc.gen_lines( opidx,                 0,'vsrli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'vsrli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',  False,     'subw', 'shift', False,      'x',   False,     False,    False)
+#// Delay one cycle to ensure all subwords have written back to RF
+opidx = mc.gen_lines( opidx,                 0,'vsrli_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Perform bitwise shifting
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'vsrli_microcode',  False,    'x',        'x',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vsrli_microcode',  False,    'x',        'n',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,     True)
+%>
+
+wire [cs_sz-1:0] vsrai_microcode[7:0];
+<%
+opidx = 0
+#// TODO: Account for when RS1 and RD are the same
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#// Set shamt registers
+opidx = mc.gen_lines( opidx,                 0,'vsrai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,          True,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Set the MSB flag to be MSB of input //TODO: Optimize this away
+opidx = mc.gen_lines( opidx,                 0,'vsrai_microcode',  False,    'x',        'x',       'r',    False,      'm2l',  'rs2',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',     'x',  False,        'x', 'arith',  True,      'x',   False,     False,    False)
+#// Initialize adj_sw_sh_reg_Xh to sext(in) and perform subword-level shifting
+opidx = mc.gen_lines( opidx,                 0,'vsrai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',    'x',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'sext',   True,        'x', 'arith', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-1,'vsrai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',  'rs2',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',  False,     'subw', 'shift', False,      'x',   False,     False,    False)
+#// Delay one cycle to ensure all subwords have written back to RF
+opidx = mc.gen_lines( opidx,                 0,'vsrai_microcode',  False,    'x',        'x',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,      False,     False,         False,      'imm',        'i',    False,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+#// Perform bitwise shifting
+opidx = mc.gen_lines( opidx, NIBBLER_C_N_OFF-2,'vsrai_microcode',  False,    'x',        'x',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,    False)
+opidx = mc.gen_lines( opidx,                 0,'vsrai_microcode',  False,    'x',        'n',       'r',    False,      'm2l',   'rd',    'x',    'rd',   False,  True,     False,      False,     False,         False,      'imm',        'x',    False,       'x',       True,     'add',      '0',      'x',  'subw',   True,  'bitwise', 'shift', False,      'x',   False,     False,     True)
+%>
+
+  wire [cs_sz-1:0] nop_microcode[0:0];
+  // NOTE: It takes 8 cycles to calculate pc+4, so each NOP needs to be at least 8 (-3??) cycles long. Be safe with 8.
+  // TODO: Confirm this actually works and doesn't end after 1 cycle.
+<%
+opidx = 0
+#//                                                             cp0_wen, csr_rw, pc_mux_sel, a_mux_sel, a_rd_tmp, rf_acc_dir, a_addr, b_addr, wb_addr, mem_acc, wb_en, wb_adr_en, inc_adr_en, wb_dat_en,  shamt_reg_en, b_imm_used, b_imm_type, b_imm_en, b_imm_sel, b_imm_zero, addsub_fn,  flag_in, logic_fn, adj_sel, adj_en, wb_off_sel, fn_type, fl_en, shft_dir, addr_en, br_reg_en, new_inst
+#//opidx = mc.gen_lines( opidx, 0,'nop_microcode',                   False,        'n',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,     False,         False,      'imm',        'i',     True,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    True)
+%>
+assign nop_microcode[0]={cs_sz{1'b1}}; // TEMP FOR DEBUGGING
+  wire [cs_sz-1:0] cs_default[0:0];
+<%
+opidx = 0
+opidx = mc.gen_lines( opidx, 0,'cs_default',                      False,    'x',        'n',       'r',    False,      'l2m',   'r0',    'x',     'x',   False, False,     False,     False,      False,         False,      'imm',        'i',     True,       'x',       True,       'x',      '0',      'x',     'x',  False,        'x', 'arith', False,      'x',   False,     False,    False)
+
+%>
+
+  wire [cs_sz-1:0] cs_mux_out;
+
+
+
+reg [cs_sz-1:0] selected_uop;
+
+always @ (*) begin
+  casez ( ir )
+    32'b0000000_00000_00000_000_00000_0000000  : selected_uop = nop_microcode[uop_idx];
+    32'b0000000_?????_?????_000_?????_0110011  : selected_uop = add_microcode[uop_idx];
+    32'b0100000_?????_?????_000_?????_0110011  : selected_uop = sub_microcode[uop_idx];
+    32'b0000000_?????_?????_111_?????_0110011  : selected_uop = and_microcode[uop_idx];
+    32'b0000000_?????_?????_110_?????_0110011  : selected_uop = or_microcode[uop_idx];
+    32'b0000000_?????_?????_100_?????_0110011  : selected_uop = xor_microcode[uop_idx];
+    32'b0000000_?????_?????_010_?????_0110011  : selected_uop = slt_microcode[uop_idx];
+    32'b????????????_?????_000_?????_0010011 : selected_uop = addi_microcode[uop_idx];
+    32'b????????????_?????_111_?????_0010011 : selected_uop = andi_microcode[uop_idx];
+    32'b????????????_?????_110_?????_0010011 : selected_uop = ori_microcode[uop_idx];
+    32'b????????????_?????_100_?????_0010011 : selected_uop = xori_microcode[uop_idx];
+    32'b????????????_?????_010_?????_0010011 : selected_uop = slti_microcode[uop_idx];
+    `ifdef NIBBLER_VECTOR_SHIFT
+    32'b0100000_?????_?????_101_?????_0010011 : selected_uop = srai_microcode[uop_idx];
+    32'b0000000_?????_?????_101_?????_0010011 : selected_uop = srli_microcode[uop_idx];
+    32'b0000000_?????_?????_001_?????_0010011 : selected_uop = slli_microcode[uop_idx];
+    `endif
+    32'b????????????????????_?????_0110111    : selected_uop = lui_microcode[uop_idx];
+    32'b????????????????????_?????_0010111    : selected_uop = auipc_microcode[uop_idx];
+    32'b????????????_?????_???_?????_0000011  : selected_uop = csr_ext_mem_mode ? exload_microcode[uop_idx]  : load_microcode[uop_idx];     //TODO: Add lb, lh, lbu, lhu
+    32'b???????_?????_?????_???_?????_0100011 : selected_uop = csr_ext_mem_mode ? exstore_microcode[uop_idx] : store_microcode[uop_idx];    //TODO: Add sb, sh
+    32'b????????????_?????_???_?????_0001011  : selected_uop = exload_microcode[uop_idx];   // Same for all sizes; Datapath sext/zext as needed
+    32'b???????_?????_?????_???_?????_0101011 : selected_uop = exstore_microcode[uop_idx];  // Same for all sizes; Transducer only reads lowest _len bytes
+    32'b????????????????????_?????_1101111    : selected_uop = jal_microcode[uop_idx];
+    32'b????????????_?????_000_?????_1100111  : selected_uop = jalr_microcode[uop_idx];
+    32'b???????_?????_?????_000_?????_1100011 : selected_uop = bne_microcode[uop_idx]; // same as BNE because datapath checks branch type
+    32'b???????_?????_?????_001_?????_1100011 : selected_uop = bne_microcode[uop_idx];
+    32'b????????????_?????_001_?????_1110011  : selected_uop = csrrw_microcode[uop_idx];
+    32'b????????????_?????_010_?????_1110011  : selected_uop = csrrs_microcode[uop_idx];
+    32'b????????????_?????_011_?????_1110011  : selected_uop = csrrc_microcode[uop_idx];
+    32'b000_0_00_?_0?000_?????_110_?????_0000111 : selected_uop = vle32_v_microcode[uop_idx];
+    32'b000_0_00_?_0?000_?????_110_?????_0100111 : selected_uop = vse32_v_microcode[uop_idx];
+    32'b000000_?_?????_?????_011_?????_1010111   : selected_uop = vaddi_microcode[uop_idx];
+    32'b000000_?_?????_?????_000_?????_1010111   : selected_uop = add_microcode[uop_idx];
+    32'b000000_?_?????_?????_100_?????_1010111   : selected_uop = add_microcode[uop_idx];
+
+    32'b000010_?_?????_?????_000_?????_1010111 : selected_uop = sub_microcode[uop_idx];
+    32'b000010_?_?????_?????_100_?????_1010111 : selected_uop = sub_microcode[uop_idx];
+    32'b001001_?_?????_?????_011_?????_1010111 : selected_uop = vandi_microcode[uop_idx];
+    32'b001001_?_?????_?????_100_?????_1010111 : selected_uop = and_microcode[uop_idx];
+    32'b001001_?_?????_?????_000_?????_1010111 : selected_uop = and_microcode[uop_idx];
+    32'b001010_?_?????_?????_011_?????_1010111 : selected_uop  = vori_microcode[uop_idx];
+    32'b001010_?_?????_?????_100_?????_1010111 : selected_uop  = or_microcode[uop_idx];
+    32'b001010_?_?????_?????_000_?????_1010111 : selected_uop  = or_microcode[uop_idx];
+    32'b001011_?_?????_?????_011_?????_1010111 : selected_uop = vxori_microcode[uop_idx];
+    32'b001011_?_?????_?????_100_?????_1010111 : selected_uop = xor_microcode[uop_idx];
+    32'b001011_?_?????_?????_000_?????_1010111 : selected_uop = xor_microcode[uop_idx];
+    32'b100101_?_?????_?????_011_?????_1010111 : selected_uop = vslli_microcode[uop_idx];
+    32'b101000_?_?????_?????_011_?????_1010111 : selected_uop = vsrli_microcode[uop_idx];
+    32'b101001_?_?????_?????_011_?????_1010111 : selected_uop = vsrai_microcode[uop_idx];
+    32'b011011_?_?????_?????_100_?????_1010111 : selected_uop = slt_microcode[uop_idx];
+    32'b011011_?_?????_?????_000_?????_1010111 : selected_uop = slt_microcode[uop_idx];
+    32'b0_???????????_?????_111_?????_1010111  : selected_uop = vsetvli_microcode[uop_idx];
+
+    //default to nop
+    default                : selected_uop = nop_microcode[uop_idx];
+  endcase
+
+end
+
+
+ assign cs_mux_out = (new_instr_req || instr_req_pending || done_fetch) ? cs_default[0] : selected_uop;
+
+
+  //---------------------------
+  // Decode Stage
+  //---------------------------
+
+  // Parse control signals from ROM
+
+  wire [1:0] uop_repeat_mux_sel_Dhl = cs_mux_out[57:56];
+  wire [4:0] uop_repeat_const_Dhl = cs_mux_out[55:51];
+
+  wire [4:0] uop_repeat_mux_out_Dhl = uop_repeat_const_Dhl;
+
+
+  assign     uop_repeat_Dhl       = uop_repeat_mux_out_Dhl;
+  wire       cp0_wen_Dhl          = cs_mux_out[50];
+  wire       csr_write_en_Dhl     = cs_mux_out[49];
+  wire       csr_read_en_Dhl      = cs_mux_out[48];
+  wire       pc_mux_sel_Dhl       = cs_mux_out[47];
+  wire       pc_plus4_mux_sel_Dhl = cs_mux_out[46]; // 1 -> PC+4, 0 -> PC. Part of a_mux_sel python
+  wire       a_mux_sel_Dhl        = cs_mux_out[45]; // 1 indicates using PC or PC+4
+  wire       a_rd_tmp_Dhl         = cs_mux_out[44];
+  // Register Interface with Mem
+  wire       rf_access_dir_Dhl    = cs_mux_out[43];
+
+  // Swap operand A and B if doing a vv or vx arithmetic instruction
+  // Note: This is a hack to enable reuse of the scalar microcode.
+  wire       op_v_major_opcode    = ir[6:0] == 7'b1010111;
+  wire       opivi_setvl_type     = (ir[14:12] == 3'b011) || (ir[14:12] == 3'b111);
+  wire [4:0] rega_addr_Dhl        = (op_v_major_opcode && !opivi_setvl_type) ? cs_mux_out[37:33] : cs_mux_out[42:38]; 
+  wire [4:0] regb_addr_Dhl        = (op_v_major_opcode && !opivi_setvl_type) ? cs_mux_out[42:38] : cs_mux_out[37:33]; 
+  wire [4:0] wb_addr_Dhl          = cs_mux_out[32:28];
+
+
+  wire       mem_access_Dhl       = cs_mux_out[27];
+
+// Differentiate between vector and scalar writeback
+  wire       load_fp_major_opcode  = ir[6:0] == 7'b0000111;
+  wire       store_fp_major_opcode = ir[6:0] == 7'b0100111;
+  wire       is_vector_wb_instr    = (load_fp_major_opcode || (op_v_major_opcode && ir[14:12] != 3'b111));
+  wire       wb_en_Dhl             = cs_mux_out[26] && (!is_vector_wb_instr);
+  wire       v_wb_en_Dhl           = cs_mux_out[26] && ( is_vector_wb_instr);
+
+  wire       wb_to_addr_Dhl       = cs_mux_out[25];
+  wire       sp_subword_incr_Dhl  = cs_mux_out[24];
+  wire       wb_to_data_Dhl       = cs_mux_out[23];
+  wire       shamt_reg_en_Dhl     = cs_mux_out[22];
+        
+  // ALU Inputs
+  // Immediate handling
+  wire       b_imm_reg_en_Dhl     = cs_mux_out[21];
+  wire       b_imm_reg_sel_Dhl    = cs_mux_out[20];
+  wire [2:0] b_imm_type_Dhl       = cs_mux_out[19:17];
+  wire       b_imm_zero_Dhl       = cs_mux_out[16];
+  wire       b_mux_sel_Dhl        = cs_mux_out[15];
+
+  wire       addsub_fn_Dhl        = cs_mux_out[14];
+  wire       prop_flag_Dhl        = cs_mux_out[13];
+  wire       carry_in_1_Dhl       = cs_mux_out[12];
+  wire [1:0] logic_fn_Dhl         = cs_mux_out[11:10];
+  wire       adj_sw_mux_sel_Dhl   = cs_mux_out[9];
+  wire       adj_sw_reg_en_Dhl    = cs_mux_out[8];
+  wire       a_offset_mux_sel_Dhl = cs_mux_out[7];
+  
+  wire [1:0] alu_fn_type_Dhl      =cs_mux_out[6:5];
+
+  wire       flag_reg_en_Dhl      = cs_mux_out[4];
+  wire       addr_shift_dir_sel_Dhl= cs_mux_out[3];
+  wire       addr_reg_en_Dhl      = cs_mux_out[2];
+  wire       br_reg_en_Dhl        = cs_mux_out[1];
+  assign     last_uop_Dhl         = cs_mux_out[0];
+
+
+  // Process immediate value from IR as necesssary
+  reg  [31:0] immed_Dhl;
+  reg  [31:0] immed_Rhl;
+  wire [31:0] immed_shift_mux_out_Dhl;
+
+  wire [31:0] i_immed = {{21{ir[31]}}, ir[30:25], ir[24:21], ir[20]};
+  wire [31:0] s_immed = {{21{ir[31]}}, ir[30:25], ir[11:8], ir[7]};
+  wire [31:0] b_immed = {{20{ir[31]}}, ir[7], ir[30:25], ir[11:8], 1'b0};
+  wire [31:0] u_immed = {ir[31:12], 12'b0};
+  wire [31:0] j_immed = {{12{ir[31]}}, ir[19:12], ir[20], ir[30:25], ir[24:21], 1'b0};
+
+  reg [31:0] immed_type_out_Dhl;
+  always @(*) begin
+    case (b_imm_type_Dhl)
+      immed_type_i: immed_type_out_Dhl = i_immed;
+      immed_type_s: immed_type_out_Dhl = s_immed;
+      immed_type_b: immed_type_out_Dhl = b_immed;
+      immed_type_u: immed_type_out_Dhl = u_immed;
+      immed_type_j: immed_type_out_Dhl = j_immed;
+      default: immed_type_out_Dhl = 32'b0;
+    endcase
+  end
+  wire[31:0] v_immed_mux_out_Dhl = (ir[6:0]==7'b1010111) ? {26'b0, ir[19:15]} : immed_type_out_Dhl; // Overwrite scalar immediates for vector instructions
+<%
+print('  assign immed_shift_mux_out_Dhl = (b_imm_reg_sel_Dhl) ? v_immed_mux_out_Dhl : (immed_Rhl >> '+str(NIBBLER_P_NBITS)+');')
+%>
+  always @(*)begin
+    immed_Dhl = immed_Rhl;
+    if (b_imm_reg_en_Dhl) begin
+      immed_Dhl = immed_shift_mux_out_Dhl;
+    end
+  end
+
+  always @ (posedge clk) begin
+    if (reset) begin
+      immed_Rhl <= 32'b0;
+    end else begin
+      immed_Rhl <= immed_Dhl;
+    end
+  end
+
+  // Calculate sub-word offset to be used
+  // Logic: Keep incrementing whenever nonzero register is being accessed.
+  // Reset when zero is accessed. This assumes all non-r0 reg accesses occur
+  // on word-aligned accesses.
+
+reg [NIBBLER_C_OFFBITS-1:0] a_subword_off_Dhl ;
+reg [NIBBLER_C_OFFBITS-1:0] b_subword_off_Dhl ;
+reg [NIBBLER_C_OFFBITS-1:0] wb_subword_off_Dhl;
+reg [NIBBLER_C_OFFBITS-1:0] wb_subword_off_Rhl;
+
+
+// Reg A
+always @ (*) begin
+  if (reset || rega_addr_Dhl == 5'b0) begin
+    a_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b0}};
+  end else if (rega_addr_Dhl != rega_addr_Rhl) begin
+    if (rf_access_dir_Dhl) begin
+      a_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b1}};
+    end else begin
+      a_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b0}};
+    end 
+  end else begin
+    if (rf_access_dir_Dhl) begin
+      a_subword_off_Dhl = a_subword_off_Rhl - {{(NIBBLER_C_OFFBITS-1){1'b0}}, 1'b1};
+    end else begin
+      a_subword_off_Dhl = a_subword_off_Rhl + {{(NIBBLER_C_OFFBITS-1){1'b0}}, 1'b1};
+    end
+  end
+end
+
+
+// Reg B
+always @ (*) begin
+  if (reset || regb_addr_Dhl == 5'b0) begin
+    b_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b0}};
+  end else if (regb_addr_Dhl != regb_addr_Rhl) begin
+    if (rf_access_dir_Dhl) begin
+      b_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b1}};
+    end else begin
+      b_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b0}};
+    end
+  end else begin
+    if (rf_access_dir_Dhl) begin
+      b_subword_off_Dhl = b_subword_off_Rhl - {{(NIBBLER_C_OFFBITS-1){1'b0}}, 1'b1};
+    end else begin
+      b_subword_off_Dhl = b_subword_off_Rhl + {{(NIBBLER_C_OFFBITS-1){1'b0}}, 1'b1};
+    end
+  end
+end
+
+// Writeback Reg
+reg [4:0] wb_addr_Rhl;
+always @ (*) begin
+  if (reset || wb_addr_Dhl == 5'b0 || dmemreq_pending_next) begin
+    wb_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b0}};
+  end else if (spmemreq_pending_next) begin
+    wb_subword_off_Dhl = wb_subword_off_Dhl; // Hold offset when loading from the scratchpad.
+  end else if (wb_addr_Dhl != wb_addr_Rhl) begin
+    if (rf_access_dir_Dhl) begin
+      wb_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b1}};
+    end else begin
+      wb_subword_off_Dhl = {NIBBLER_C_OFFBITS{1'b0}};
+    end
+  end else begin
+    if (rf_access_dir_Dhl) begin
+      wb_subword_off_Dhl = wb_subword_off_Rhl - {{(NIBBLER_C_OFFBITS-1){1'b0}}, 1'b1};
+    end else begin
+      wb_subword_off_Dhl = wb_subword_off_Rhl + {{(NIBBLER_C_OFFBITS-1){1'b0}}, 1'b1};
+    end
+  end
+end
+
+  // Vector Extension Control Signals
+  wire vl_reg_en_Dhl = (ir[6:0] == 7'b1010111) && (ir[14:12] == 3'b111);
+
+
+  // Extract coprocessor info from IR
+  // Defined in RISC-V manual
+  wire [11:0] cp0_addr_Dhl = ir[31:20];
+
+  //----------------------
+  // Register Read Stage
+  //----------------------
+
+  reg       csr_write_en_Rhl;
+  reg       csr_read_en_Rhl;
+  reg       pc_mux_sel_Rhl;
+  reg       pc_plus4_mux_sel_Rhl;
+  reg       mem_access_Rhl;
+  reg       wb_en_Rhl;
+  reg       v_wb_en_Rhl;
+  reg       wb_to_addr_Rhl;
+  reg       sp_subword_incr_Rhl;
+  reg       wb_to_data_Rhl;
+  `ifdef NIBBLER_VECTOR_SHIFT
+  reg       shamt_reg_en_Rhl;
+  reg       adj_sw_mux_sel_Rhl;
+  reg       adj_sw_reg_en_Rhl;
+  reg       a_rd_tmp_Rhl;
+  `endif
+  reg       a_mux_sel_Rhl;
+ 
+
+
+  reg       b_imm_zero_Rhl; 
+  reg       b_mux_sel_Rhl;
+
+
+  reg       addsub_fn_Rhl;
+  reg       prop_flag_Rhl;
+  reg       carry_in_1_Rhl;
+  reg [1:0] logic_fn_Rhl ;
+  reg [1:0] shift_fn_Rhl ;
+
+  reg [1:0] alu_fn_type_Rhl;
+
+  reg       flag_reg_en_Rhl;
+  reg       addr_shift_dir_sel_Rhl;
+  reg       addr_reg_en_Rhl;
+  reg       last_uop_Rhl;
+  reg       br_reg_en_Rhl;
+  reg       cp0_wen_Rhl;
+  reg [11:0]cp0_addr_Rhl;
+  reg       vl_reg_en_Rhl;
+
+
+
+  always @ (posedge clk) begin
+    if (!stall_memreq) begin
+    csr_write_en_Rhl     <= csr_write_en_Dhl;
+    csr_read_en_Rhl      <= csr_read_en_Dhl;
+    pc_mux_sel_Rhl       <= pc_mux_sel_Dhl;
+    pc_plus4_mux_sel_Rhl <= pc_plus4_mux_sel_Dhl;
+    rega_addr_Rhl        <= rega_addr_Dhl;
+    regb_addr_Rhl        <= regb_addr_Dhl;
+    wb_addr_Rhl          <= wb_addr_Dhl;
+    mem_access_Rhl       <= mem_access_Dhl;
+    wb_en_Rhl            <= wb_en_Dhl;
+    v_wb_en_Rhl          <= v_wb_en_Dhl;
+    wb_to_addr_Rhl       <= wb_to_addr_Dhl;
+    sp_subword_incr_Rhl  <= sp_subword_incr_Dhl;
+    wb_to_data_Rhl       <= wb_to_data_Dhl;
+
+    `ifdef NIBBLER_VECTOR_SHIFT
+    shamt_reg_en_Rhl     <= shamt_reg_en_Dhl;
+    adj_sw_mux_sel_Rhl   <= adj_sw_mux_sel_Dhl;
+    adj_sw_reg_en_Rhl    <= adj_sw_reg_en_Dhl;
+    a_offset_mux_sel_Rhl <= a_offset_mux_sel_Dhl;
+    a_rd_tmp_Rhl         <= a_rd_tmp_Dhl;
+    `endif
+    a_mux_sel_Rhl        <= a_mux_sel_Dhl;
+    b_imm_zero_Rhl       <= b_imm_zero_Dhl;
+    b_mux_sel_Rhl        <= b_mux_sel_Dhl;
+
+    a_subword_off_Rhl    <= a_subword_off_Dhl;
+    b_subword_off_Rhl    <= b_subword_off_Dhl;
+    wb_subword_off_Rhl   <= wb_subword_off_Dhl;
+
+    addsub_fn_Rhl        <= addsub_fn_Dhl;
+    prop_flag_Rhl        <= prop_flag_Dhl;
+    carry_in_1_Rhl       <= carry_in_1_Dhl;
+    logic_fn_Rhl         <= logic_fn_Dhl ;
+    alu_fn_type_Rhl      <= alu_fn_type_Dhl;
+
+    flag_reg_en_Rhl      <= flag_reg_en_Dhl;
+    addr_shift_dir_sel_Rhl<= addr_shift_dir_sel_Dhl;
+    addr_reg_en_Rhl      <= addr_reg_en_Dhl;
+    last_uop_Rhl         <= last_uop_Dhl;
+    br_reg_en_Rhl        <= br_reg_en_Dhl;
+    cp0_wen_Rhl          <= cp0_wen_Dhl;
+    cp0_addr_Rhl         <= cp0_addr_Dhl;
+    vl_reg_en_Rhl        <= vl_reg_en_Dhl;
+    end
+  end
+
+  //---------------------------
+  // Execute stage (X)
+  //---------------------------
+  reg        mem_access_Xhl;
+  reg        cp0_wen_Xhl;
+  reg [11:0] cp0_addr_Xhl;
+  wire       sp_handshake = (spmemreq_val && spmemreq_rdy);
+  
+  always @ (posedge clk) begin
+    if (!stall_memreq) begin
+      
+    csr_write_en_Xhl     <= csr_write_en_Rhl;
+    csr_read_en_Xhl      <= csr_read_en_Rhl;
+    pc_mux_sel_Xhl       <= pc_mux_sel_Rhl;
+    pc_plus4_mux_sel_Xhl <= pc_plus4_mux_sel_Rhl;
+    wb_addr_Xhl          <= wb_addr_Rhl;
+    wb_subword_off_Xhl   <= wb_subword_off_Rhl;
+    mem_access_Xhl       <= mem_access_Rhl;
+    wb_en_Xhl            <= wb_en_Rhl;
+    v_wb_en_Xhl          <= (sp_handshake && spmemreq_rw) ? 1'b1 : v_wb_en_Rhl; // When scratchpad responds to vector load
+    vm_reg_en_Xhl        <= 1'b1; // TODO: change to (*.mm inst?) && (vd == v0)
+    wb_to_addr_Xhl       <= wb_to_addr_Rhl;
+    sp_subword_incr_Xhl  <= sp_subword_incr_Rhl;
+    wb_to_data_Xhl       <= wb_to_data_Rhl;
+    `ifdef NIBBLER_VECTOR_SHIFT
+    shamt_reg_en_Xhl     <= shamt_reg_en_Rhl;
+    adj_sw_mux_sel_Xhl   <= adj_sw_mux_sel_Rhl;
+    adj_sw_reg_en_Xhl    <= adj_sw_reg_en_Rhl;
+    a_offset_mux_sel_Xhl <= a_offset_mux_sel_Rhl;
+    a_rd_tmp_Xhl         <= a_rd_tmp_Rhl;
+    `endif
+    a_mux_sel_Xhl        <= a_mux_sel_Rhl;
+    
+<%
+print('    b_imm_Xhl            <= b_imm_zero_Rhl ? 1\'b0 : immed_Rhl['+str(NIBBLER_P_NBITS-1)+':0];')
+%>
+    b_mux_sel_Xhl         <= b_mux_sel_Rhl;
+
+    addsub_fn_Xhl          <= addsub_fn_Rhl;
+    prop_flag_Xhl          <= prop_flag_Rhl;
+    carry_in_1_Xhl         <= carry_in_1_Rhl;
+    logic_fn_Xhl           <= logic_fn_Rhl;
+    alu_fn_type_Xhl        <= alu_fn_type_Rhl;
+    flag_reg_en_Xhl        <= flag_reg_en_Rhl;
+    addr_shift_dir_sel_Xhl <= addr_shift_dir_sel_Rhl;
+
+    addr_reg_en_Xhl        <= addr_reg_en_Rhl;
+    last_uop_Xhl           <= last_uop_Rhl;
+    br_reg_en_Xhl          <= br_reg_en_Rhl;
+    cp0_wen_Xhl            <= cp0_wen_Rhl;
+    cp0_addr_Xhl           <= cp0_addr_Rhl;
+    vl_reg_en_Xhl        <= vl_reg_en_Rhl;
+    end
+  end
+  
+
+// Shifting Control signals:
+assign shamt_mux_sel_Xhl = op_v_major_opcode ? 1'b0 : ir[5];   // Based on opcode for SRA/SRAI. TODO: Currently only vector shift supported is vsll.vi
+assign shamt_imm_Xhl = op_v_major_opcode ? rs1 : rs2;
+assign shift_inst_dir_Xhl = op_v_major_opcode ? ir[29] : ir[14]; // based on funct3 for RISCV Shifts. TODO: Currently only vector shift supported is vsll.vi
+
+// Branching control signals:
+assign br_type_Xhl = ir[14:12];
+
+// Vector lane masking:
+
+wire vector_arithmetic_instruction = op_v_major_opcode && (ir[14:12] != 3'b111);
+assign masking_en_Xhl = (load_fp_major_opcode || store_fp_major_opcode || op_v_major_opcode || vector_arithmetic_instruction) 
+                         && !ir[25];
+
+// Vector memory accesses.
+// Parses IR to see if it's a 32-bit wide element unit-stride vector loador store
+assign vector_memop_Xhl = (ir[6:0] == 7'b0000111 || ir[6:0] == 7'b0100111) && !ir[28] && (ir[14:12] == 3'b110);
+
+// Coprocessor0
+  reg        cp0_stats;
+
+  reg [31:0] cp0_status_next;
+  reg        cp0_stats_next;
+
+  always @ (*) begin
+    cp0_status_next = cp0_status;
+    cp0_stats_next = cp0_stats;
+    if (cp0_wen_Xhl && (cp0_addr_Xhl == 12'h7c0)) begin
+      cp0_status_next = proc2cop_data_Xhl;
+    end else if (cp0_wen_Xhl && (cp0_addr_Xhl == 12'h7c1)) begin
+      cp0_stats_next = proc2cop_data_Xhl[0];
+    end
+  end
+
+  //---------------------------------
+  // Handle off-tile memory requests
+  //---------------------------------
+  
+  wire scalar_sp_memreq = (((ir[6:0] == 7'b0000011) || (ir[6:0] ==7'b0100011)) && !csr_ext_mem_mode) ;
+  wire vector_sp_memreq = ((ir[6:0] == 7'b0000111) || (ir[6:0] ==7'b0100111));
+  wire inst_accesses_sp = scalar_sp_memreq || vector_sp_memreq;
+
+  // load=0 store=1; constant = opcode[6:0] for all stores taken from risc-v manual.
+  assign dmemreq_msg_rw = (ir[6:0] == 7'b0100011 || ir[6:0] == 7'b0101011);
+  // 1 = 1B, 2 = 2B, 3 = 3B, 0 = 4B
+  // In risc-v, all Byte have [13:12] == 00, Half = 01, Word = 10
+  assign dmemreq_msg_len = (ir[13:12] == 2'b00) ? 2'b01 :
+                          ((ir[13:12] == 2'b01) ? 2'b10 :
+                          ((ir[13:12] == 2'b10) ? 2'b00 :
+                          ((ir[13:12] == 2'b11) ? 2'b11 :
+                            2'b00)));
+  
+  assign dmemreq_signed = ir[14];
+
+  reg dmemreq_val_next;
+  reg dmemreq_pending;
+
+  always @(*) begin
+    dmemreq_val_next = dmemreq_val;
+    if (dmemreq_val && dmemreq_rdy) begin
+      dmemreq_val_next = 1'b0;
+    end else if (mem_access_Xhl && !inst_accesses_sp && !dmemreq_pending) begin
+      dmemreq_val_next = 1'b1;
+    end
+  end
+  
+  // We are always ready to accept a memory response
+  // any time after the dmemreq is sent
+  assign dmemresp_rdy = dmemreq_pending;
+
+  always @ (*)
+  begin
+    dmemreq_pending_next = dmemreq_pending;
+    // If a dmem request is not pending and the instruction in X indicates it's ready to access memory
+    if (reset) begin
+      dmemreq_pending_next = 1'b0;
+    end else if (dmemresp_val && dmemresp_rdy) begin
+      dmemreq_pending_next = 1'b0;
+    end else if (nibbler_int || nibbler_csr_int) begin
+      dmemreq_pending_next = 1'b0;
+    end else if (mem_access_Xhl && !inst_accesses_sp) begin
+      dmemreq_pending_next = 1'b1;
+    end
+  end
+
+//-------------------------------------
+  // Handle scratchpad memory requests
+  //-----------------------------------
+  // load=0 store=1; constant = opcode[6:0] for all stores taken from risc-v manual.
+  //assign dmemreq_msg_rw = (ir[6:0] == 7'b0100011);
+  // 1 = 1B, 2 = 2B, 3 = 3B, 0 = 4B
+  // In risc-v, all Byte have [13:12] == 00, Half = 01, Word = 10
+  // assign dmemreq_msg_len = (ir[13:12] == 00) ? 2'b01 :
+  //                         ((ir[13:12] == 01) ? 2'b10 :
+  //                         ((ir[13:12] == 10) ? 2'b00 :
+  //                           2'b00));
+  
+  assign spmemreq_rw = !((ir[6:0] == 7'b0100111) || ((ir[6:0] == 7'b0100011) && inst_accesses_sp)); // vector store or scalar store to scratchpad
+
+  assign spmemreq_val = mem_access_Xhl && inst_accesses_sp;
+
+  reg spmemreq_pending;
+
+  always @ (*)
+  begin
+    spmemreq_pending_next = spmemreq_pending;
+    // If a dmem request is not pending and the instruction in X indicates it's ready to access memory
+    if (reset) begin
+      spmemreq_pending_next = 1'b0;
+    end else if (spmemreq_val && spmemreq_rdy) begin // Scratchpad always responds in 1 cycle
+      spmemreq_pending_next = 1'b0;
+    end else if (mem_access_Xhl && inst_accesses_sp && !spmemreq_rdy) begin
+      spmemreq_pending_next = 1'b1;
+    end
+  end
+
+  always @(posedge clk) begin
+    if (reset) begin
+      sp_handshake_prev <= 1'b0;
+    end else begin
+      sp_handshake_prev <= sp_handshake;
+    end
+  end
+
+  always @ (posedge clk) begin
+    if (reset) begin
+      cp0_status <= 32'b0;
+      cp0_stats <= 1'b0;
+      dmemreq_val <= 1'b0;
+      dmemreq_pending <= 1'b0;
+      spmemreq_pending <= 1'b0;
+    end else begin
+      cp0_status <= cp0_status_next;
+      cp0_stats <= cp0_stats_next;
+      dmemreq_val <= dmemreq_val_next;
+      dmemreq_pending <= dmemreq_pending_next;
+      spmemreq_pending <= spmemreq_pending_next;
+    end
+  end
+
+endmodule
+`endif
+

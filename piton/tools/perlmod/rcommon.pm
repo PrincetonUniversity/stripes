@@ -86,7 +86,7 @@ sub process_blocks {
             $block_line = $_ ;
             if (!block_line_is_comment($block_line))
             {
-                $block_data = process_block_line ($block_line); 
+                $block_data = process_block_line ($block_line);
                 $block_count++;
                 push @block_match_list, $block_data ;
             }
@@ -108,7 +108,7 @@ sub process_blocks {
                     }
                 }
             }
-        }                                                                                                            
+        }
     }
     close(BLK_IN);
 
@@ -129,6 +129,7 @@ sub create_slurm_script {
     open(BLK_CMD, "> $cmd_script") or die ("DIE. could not open $cmd_script");
     print BLK_CMD "#!/bin/bash\n";
     print BLK_CMD "#SBATCH -n $scores\n";
+    # print BLK_CMD "#SBATCH -C cascade\n";
     print BLK_CMD "#SBATCH -N 1\n";
     if ($smem ne "") {
         print BLK_CMD "#SBATCH --mem $smem\n";
@@ -146,7 +147,41 @@ sub create_slurm_script {
     print BLK_CMD "exit";
     close(BLK_CMD);
 
-    return 0; 
+    return 0;
+}
+
+sub create_dep_slurm_script {
+    my ($cmd_script, $cmd, $scores, $stime, $dep, $smem, $pre_cmd, $post_cmd) = @_;
+    # If these are not defined, set them to invalid values to check later
+    $smem //= "";
+    $pre_cmd //= "";
+    $post_cmd //= "";
+
+    open(BLK_CMD, "> $cmd_script") or die ("DIE. could not open $cmd_script");
+    print BLK_CMD "#!/bin/bash\n";
+    print BLK_CMD "#SBATCH -n $scores\n";
+    print BLK_CMD "#SBATCH -N 1\n";
+    if ($smem ne "") {
+        print BLK_CMD "#SBATCH --mem $smem\n";
+    }
+    print BLK_CMD "#SBATCH -t $stime\n";
+    if ($dep ne "") {
+        print BLK_CMD "#SBATCH -d afterany:$dep\n";
+    }
+    print BLK_CMD "\n";
+    if ($pre_cmd ne "")
+    {
+        print BLK_CMD "$pre_cmd\n\n"
+    }
+    print BLK_CMD "$cmd\n\n";
+    if ($post_cmd ne "")
+    {
+        print BLK_CMD "$post_cmd\n\n";
+    }
+    print BLK_CMD "exit";
+    close(BLK_CMD);
+
+    return 0;
 }
 
 sub submit_slurm_job {
